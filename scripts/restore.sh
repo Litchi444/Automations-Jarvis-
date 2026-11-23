@@ -57,7 +57,7 @@ for f in db.dump env manifest.txt; do [ -s "$WORK/$f" ] || bail "archive is miss
 pass "decrypt" "$(basename "$ARCHIVE")"
 info "backup created" "$(grep '^created_utc=' "$WORK/manifest.txt" | cut -d= -f2)"
 
-psql_live() { docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -tA' ; }
+psql_live() { docker compose exec -T postgres sh -c 'PGOPTIONS="-c client_min_messages=warning" psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -tA' ; }
 
 # ── VERIFY ───────────────────────────────────────────────────
 if [ "$APPLY" = 0 ]; then
