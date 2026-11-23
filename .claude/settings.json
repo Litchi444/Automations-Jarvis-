@@ -36,8 +36,7 @@
       "Bash(docker compose down --volumes *)",
       "Bash(docker volume rm *)",
       "Bash(docker system prune *)",
-      "Bash(rm -rf *)",
-      "Bash(git push *)"
+      "Bash(rm -rf *)"
     ]
   }
 }
