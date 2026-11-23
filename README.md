@@ -89,7 +89,7 @@ You (voice/text) ─► Telegram Trigger ─► Route update (only YOUR private 
 ## 1. Prerequisites
 
 - Docker + Compose v2
-- **A public HTTPS URL for n8n.** Telegram has to reach the assistant. Use the Oracle VM with a domain (§9), or a tunnel such as Cloudflare Tunnel on your PC. The morning briefing alone works without one.
+- **A public HTTPS URL for n8n.** Telegram has to reach the assistant. Options (§9): a small VPS with a domain (about 5 €/month, Hetzner for example), or a Cloudflare Tunnel on your PC while you test. The morning briefing alone works without one.
 - Gemini API key ([aistudio.google.com](https://aistudio.google.com))
 - Telegram bot token (@BotFather) and your chat ID (@userinfobot). **Send `/start` to your bot once.**
 - A Google Cloud project with the **Gmail API** and **Google Calendar API** enabled
@@ -106,7 +106,7 @@ openssl rand -hex 32   # → POSTGRES_PASSWORD
 ## 3. Start
 
 ```bash
-docker compose --profile cloud up -d --build    # VM with Caddy + HTTPS
+docker compose --profile cloud up -d --build    # VPS with Caddy + HTTPS (see §9 for a one-shot bootstrap)
 # or: docker compose up -d --build              # local (briefing only, unless tunneled)
 
 docker compose exec n8n /usr/local/bin/ffmpeg -hide_banner -encoders | grep opus   # expect libopus
@@ -172,11 +172,52 @@ Telegram allows one webhook per bot. If you use *Listen for test event* in the e
 | Assistant → Chat memory | `contextWindowLength` | 12 messages |
 | Assistant → Jarvis | system message (persona, rules, output format) | |
 
-## 9. Oracle Cloud notes
+## 9. Hosting
 
-- Google rejects raw IPs as redirect URIs: point a domain at the VM (a free DuckDNS subdomain works). Set `N8N_HOST`, `N8N_PROTOCOL=https`, `WEBHOOK_URL=https://your.domain/`.
-- Open 80/443 in **both** the VCN security list and the VM firewall.
-- Port 5678 is bound to `127.0.0.1`. Only Caddy is public.
+Pick one. The stack is the same everywhere; only the URL differs.
+
+| Option | Cost | Telegram assistant | Good for |
+|---|---|---|---|
+| VPS + domain + Caddy | about 5 €/month | always on | production |
+| PC + Cloudflare Tunnel | free | only while the PC is on | testing before you pay for a server |
+| PC, no tunnel | free | no | morning briefing only |
+
+### 9a. VPS (Hetzner or any Debian/Ubuntu box)
+
+Sizing: 2 vCPU and 4 GB RAM is enough (Postgres + n8n + ffmpeg). With 2 GB, keep the swap file the script creates and expect slow builds. The n8n image ships static ffmpeg for amd64 and arm64, so Hetzner's ARM plans work too. Hetzner bills by the hour with no commitment: create the server when you are ready, delete it to stop paying. Check the current plan and price on hetzner.com before ordering, they have changed several times in 2026.
+
+1. Create the server (Debian 12/13 or Ubuntu 24.04, add your SSH key).
+2. Get a hostname. Google rejects raw IPs as redirect URIs. A free DuckDNS subdomain works. Point its A record at the server IP.
+3. On the server:
+   ```bash
+   apt-get update && apt-get install -y git
+   git clone <your repo url> && cd Automations-Jarvis-
+   scripts/bootstrap-vps.sh --domain jarvis.example.com   # add --dry-run first if you want to read the plan
+   nano .env                                               # TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+   scripts/check-env.sh
+   docker compose --profile cloud up -d --build
+   scripts/stack-health.sh
+   ```
+   The script updates the system, installs Docker, adds swap, opens only 22/80/443 in ufw, writes `N8N_HOST`, `N8N_PROTOCOL`, `WEBHOOK_URL` and generates `N8N_ENCRYPTION_KEY` and `POSTGRES_PASSWORD`. It never prints secrets and never overwrites them when data volumes already exist. Re-running it is safe.
+4. Back up `N8N_ENCRYPTION_KEY` somewhere other than the server. Without it, every stored credential is lost if the server dies.
+5. Port 5678 stays bound to `127.0.0.1` and Postgres has no published port. Only Caddy is public.
+
+Hetzner also has a cloud firewall in its console. The script's ufw rules are enough, but you can add the same three ports there.
+
+### 9b. PC + Cloudflare Tunnel (free, for testing)
+
+```bash
+docker compose up -d --build                         # no cloud profile, no Caddy
+cloudflared tunnel --url http://localhost:5678       # prints https://<random>.trycloudflare.com
+```
+
+Then in `.env`: `N8N_HOST=<random>.trycloudflare.com`, `N8N_PROTOCOL=https`, `WEBHOOK_URL=https://<random>.trycloudflare.com/`, and `docker compose up -d --force-recreate n8n`. Republish the assistant workflow so Telegram's webhook is registered on the new URL.
+
+Limits of a quick tunnel: the hostname changes at every restart, so repeat the steps above each time, and the Google OAuth redirect URI (built from `WEBHOOK_URL`) changes with it. A named tunnel on a domain you own gives a stable hostname.
+
+### 9c. PC only
+
+Leave `.env` on `localhost` / `http`. The 07:30 briefing runs; the Telegram assistant does not receive messages.
 
 ## 10. Privacy and cost
 
@@ -205,7 +246,7 @@ src/assistant/sql/*.sql          queries used by the Postgres nodes
 src/build_workflows.py           regenerates workflows/*.json from src/
 docker/postgres/init/            assistant schema
 tests/                           npm test → 32 code-node tests + 13 SQL tests (embedded Postgres)
-scripts/                         summary scripts for agents + audit-invariants.py (13 checks)
+scripts/                         summary scripts for agents, audit-invariants.py (13 checks), bootstrap-vps.sh
 .claude/agents/, plan/           the Claude Code agent team and the phased plan
 ```
 

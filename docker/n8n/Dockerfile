@@ -1,6 +1,6 @@
 # n8n 2.x ships a hardened image with no package manager (no apk/apt).
 # We therefore pull a statically linked ffmpeg from a multi-arch image
-# (amd64 + arm64, so it also runs on Oracle Cloud Ampere VMs).
+# (amd64 + arm64, so it also runs on ARM VPS plans).
 # No RUN instructions on purpose: the base image may not have a usable shell.
 
 ARG N8N_VERSION=2.48.8

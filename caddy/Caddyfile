@@ -1,5 +1,5 @@
 # Automatic HTTPS (Let's Encrypt) for the n8n editor + OAuth callback.
-# N8N_HOST must be a real DNS name pointing at the VM (Google OAuth
+# N8N_HOST must be a real DNS name pointing at the server (Google OAuth
 # rejects raw IPs). A free DuckDNS subdomain works.
 {$N8N_HOST} {
 	encode gzip
