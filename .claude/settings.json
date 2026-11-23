@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(./scripts/check-env.sh)",
+      "Bash(./scripts/stack-health.sh)",
+      "Bash(./scripts/tg-webhook-info.sh)",
+      "Bash(./scripts/n8n-executions.sh *)",
+      "Bash(./scripts/decision-log.sh)",
+      "Bash(python3 scripts/audit-invariants.py)",
+      "Bash(python3 src/build_workflows.py)",
+      "Bash(docker compose ps *)",
+      "Bash(docker compose logs *)",
+      "Bash(docker compose exec -T n8n n8n list:workflow)",
+      "Bash(git diff *)",
+      "Bash(git status *)"
+    ],
+    "ask": [
+      "Bash(./scripts/gen-secrets.sh)",
+      "Bash(./scripts/run-briefing.sh)",
+      "Bash(docker compose up *)",
+      "Bash(docker compose --profile cloud up *)",
+      "Bash(docker compose restart *)",
+      "Bash(docker compose exec -T n8n n8n import:workflow *)",
+      "Bash(docker compose exec -T n8n n8n publish:workflow *)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Edit(./.env)",
+      "Bash(cat .env)",
+      "Bash(less .env)",
+      "Bash(head * .env)",
+      "Bash(tail * .env)",
+      "Bash(grep * .env)",
+      "Bash(docker compose down -v *)",
+      "Bash(docker compose down --volumes *)",
+      "Bash(docker volume rm *)",
+      "Bash(docker system prune *)",
+      "Bash(rm -rf *)",
+      "Bash(git push *)"
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "morning-briefing-tests",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test:code": "node code_nodes.test.js",
+    "test:sql": "node sql.test.mjs",
+    "test": "npm run test:code && npm run test:sql"
+  },
+  "devDependencies": {
+    "embedded-postgres": "*",
+    "pg": "*"
+  }
+}

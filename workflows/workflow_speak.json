@@ -1,0 +1,356 @@
+{
+  "id": "mbSpeakVoiceNote",
+  "name": "Speak: text → Gemini voice → Telegram (sub-workflow)",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "3879471e-a7dd-5660-a1b6-47019e336a26",
+      "name": "When called by another workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f7193ec3-2a91-5411-8de7-f4e49bf7e3ae",
+              "name": "ttsModel",
+              "value": "gemini-3.1-flash-tts-preview",
+              "type": "string"
+            },
+            {
+              "id": "82936855-409a-57a1-8a80-c1dda619e62b",
+              "name": "voiceName",
+              "value": "Kore",
+              "type": "string"
+            },
+            {
+              "id": "62c22ad7-03c4-50d9-ad39-7a80732f3747",
+              "name": "ttsStyle",
+              "value": "Read this in a calm, warm, natural voice",
+              "type": "string"
+            },
+            {
+              "id": "4a8ef131-d4b5-5826-9410-b635ca3ecdf3",
+              "name": "text",
+              "value": "={{ String($json.text || '').trim() }}",
+              "type": "string"
+            },
+            {
+              "id": "68e44b94-da62-52ed-a88b-9a0c6b917d89",
+              "name": "caption",
+              "value": "={{ String($json.caption || $json.text || '').slice(0, 1024) }}",
+              "type": "string"
+            },
+            {
+              "id": "5a52c832-e16d-5a32-9268-4cd75d7fd779",
+              "name": "chatId",
+              "value": "={{ String($json.chatId || $env.TELEGRAM_CHAT_ID) }}",
+              "type": "string"
+            },
+            {
+              "id": "06e7c9ed-0047-55fb-a971-e4bf033dc82a",
+              "name": "fileBase",
+              "value": "=speak_{{ $execution.id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c66dfe71-8922-5e5e-81ad-c2860282886c",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{ $('Config').first().json.ttsModel }}:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  contents: [{ parts: [{ text: $('Config').first().json.ttsStyle + ': ' + $('Config').first().json.text }] }],\n  generationConfig: {\n    responseModalities: ['AUDIO'],\n    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: $('Config').first().json.voiceName } } }\n  }\n}) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "85086826-28ba-5502-8412-03e16f9ccb89",
+      "name": "Gemini: text-to-speech",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 10000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node: \"PCM to WAV\" (Run Once for All Items)\n// Gemini TTS returns raw 16-bit little-endian mono PCM (audio/L16;rate=24000)\n// as base64 in candidates[0].content.parts[0].inlineData.data.\n// Telegram can't play raw PCM, so we wrap it in a WAV header here and let\n// ffmpeg transcode WAV -> OGG/Opus in the next step.\n\nconst res = $input.first().json;\nconst part = (res.candidates?.[0]?.content?.parts || []).find(p => p.inlineData?.data);\nif (!part) {\n  throw new Error('Gemini TTS returned no audio. Raw: ' + JSON.stringify(res).slice(0, 500));\n}\n\nconst pcm = Buffer.from(part.inlineData.data, 'base64');\nconst mime = part.inlineData.mimeType || '';\nconst sampleRate = parseInt((mime.match(/rate=(\\d+)/) || [])[1] || '24000', 10);\nconst channels = 1;\nconst bitsPerSample = 16;\nconst blockAlign = channels * bitsPerSample / 8;\nconst byteRate = sampleRate * blockAlign;\n\nconst header = Buffer.alloc(44);\nheader.write('RIFF', 0);\nheader.writeUInt32LE(36 + pcm.length, 4);\nheader.write('WAVE', 8);\nheader.write('fmt ', 12);\nheader.writeUInt32LE(16, 16);          // PCM fmt chunk size\nheader.writeUInt16LE(1, 20);           // audio format = PCM\nheader.writeUInt16LE(channels, 22);\nheader.writeUInt32LE(sampleRate, 24);\nheader.writeUInt32LE(byteRate, 28);\nheader.writeUInt16LE(blockAlign, 32);\nheader.writeUInt16LE(bitsPerSample, 34);\nheader.write('data', 36);\nheader.writeUInt32LE(pcm.length, 40);\n\nconst wav = Buffer.concat([header, pcm]);\n\nreturn [{\n  json: {\n    sourceMimeType: mime,\n    sampleRate,\n    durationSec: Number((pcm.length / byteRate).toFixed(1)),\n  },\n  binary: {\n    data: {\n      data: wav.toString('base64'),\n      mimeType: 'audio/wav',\n      fileName: 'briefing.wav',\n      fileExtension: 'wav',\n    },\n  },\n}];\n"
+      },
+      "id": "d7475dc0-6256-54c4-a966-35b8045c246e",
+      "name": "PCM to WAV",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "=/home/node/.n8n-files/{{ $('Config').first().json.fileBase }}.wav",
+        "dataPropertyName": "data",
+        "options": {}
+      },
+      "id": "d023f4ee-010b-579a-99d3-706eee524c90",
+      "name": "Write WAV",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        880,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "executeOnce": true,
+        "command": "=/usr/local/bin/ffmpeg -hide_banner -loglevel error -y -i /home/node/.n8n-files/{{ $('Config').first().json.fileBase }}.wav -ac 1 -ar 48000 -c:a libopus -b:a 32k -application voip /home/node/.n8n-files/{{ $('Config').first().json.fileBase }}.ogg"
+      },
+      "id": "5e609430-a7d0-54b6-883b-b2bf8dbb37a9",
+      "name": "ffmpeg: WAV to OGG Opus",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        200
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "=/home/node/.n8n-files/{{ $('Config').first().json.fileBase }}.ogg",
+        "options": {
+          "dataPropertyName": "data",
+          "mimeType": "audio/ogg"
+        }
+      },
+      "id": "eb9bb385-8b71-590a-a1cc-856c18b7f9b3",
+      "name": "Read OGG",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendVoice",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chat_id",
+              "value": "={{ $('Config').first().json.chatId }}"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "voice",
+              "inputDataFieldName": "data"
+            },
+            {
+              "name": "caption",
+              "value": "={{ $('Config').first().json.caption }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "9e725f10-5761-5af6-84ce-d3ff2cc8454e",
+      "name": "Telegram: sendVoice",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        200
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "executeOnce": true,
+        "command": "=rm -f /home/node/.n8n-files/{{ $('Config').first().json.fileBase }}.wav /home/node/.n8n-files/{{ $('Config').first().json.fileBase }}.ogg"
+      },
+      "id": "15c39663-2cb4-53d1-846f-2d213e5a07df",
+      "name": "Clean up temp files",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        200
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  chat_id: $('Config').first().json.chatId,\n  text: $('Config').first().json.text\n}) }}",
+        "options": {}
+      },
+      "id": "2f235b45-8df8-5067-bf2d-85c0111db30f",
+      "name": "Telegram: text fallback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        460
+      ],
+      "executeOnce": true
+    }
+  ],
+  "connections": {
+    "When called by another workflow": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Gemini: text-to-speech",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini: text-to-speech": {
+      "main": [
+        [
+          {
+            "node": "PCM to WAV",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram: text fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PCM to WAV": {
+      "main": [
+        [
+          {
+            "node": "Write WAV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write WAV": {
+      "main": [
+        [
+          {
+            "node": "ffmpeg: WAV to OGG Opus",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ffmpeg: WAV to OGG Opus": {
+      "main": [
+        [
+          {
+            "node": "Read OGG",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram: text fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read OGG": {
+      "main": [
+        [
+          {
+            "node": "Telegram: sendVoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram: sendVoice": {
+      "main": [
+        [
+          {
+            "node": "Clean up temp files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
