@@ -204,6 +204,38 @@ Sizing: 2 vCPU and 4 GB RAM is enough (Postgres + n8n + ffmpeg). With 2 GB, keep
 
 Hetzner also has a cloud firewall in its console. The script's ufw rules are enough, but you can add the same three ports there.
 
+### 9d. Backups
+
+A 5 € VPS has no safety net. `scripts/backup.sh` saves the two things git cannot rebuild: the Postgres database (workflows, encrypted credentials, the `assistant` schema, chat memory) and `.env` (it holds `N8N_ENCRYPTION_KEY`, without which the stored credentials are unreadable). Both go into one tar, encrypted with [age](https://github.com/FiloSottile/age) to a **public** key. The server never holds the private key, so a stolen server or backup reveals nothing.
+
+1. On **your own machine**: `age-keygen -o jarvis-backup.key`. Store that file in your password manager and on paper. Lose it and the backups are worthless.
+2. On the server, put the `Public key: age1...` line in `.env` as `BACKUP_AGE_RECIPIENT`. Other settings are in `.env.example`.
+3. Run once by hand: `scripts/backup.sh`. Then schedule it: `sudo scripts/install-backup-timer.sh` (daily 03:15 server time, catches up after a reboot).
+4. Off-server copy: configure an rclone remote (`rclone config`; Backblaze B2, SFTP and others work) and set `BACKUP_RCLONE_REMOTE=b2:your-bucket/jarvis`. Check the provider's current free tier and prices yourself. Without it, backups die with the server.
+5. On failure the script sends you a Telegram message. A backup that silently stops is the usual way these setups fail, so keep the bot chat unmuted.
+
+**Verify, do not trust.** From a machine that has the private key and the archive:
+
+```bash
+scripts/restore.sh --identity jarvis-backup.key --latest        # restores into a throwaway database, counts workflows, drops it
+```
+
+Live data is untouched. Do this after the first backup and every few months.
+
+**Disaster recovery on a fresh server:**
+
+```bash
+scripts/bootstrap-vps.sh --domain your.domain
+rclone copy b2:your-bucket/jarvis/jarvis-XXXX.tar.age .       # or scp
+docker compose up -d postgres
+scripts/restore.sh --identity jarvis-backup.key jarvis-XXXX.tar.age --apply
+docker compose --profile cloud up -d --build
+```
+
+`--apply` asks you to type `restore`, replaces the live database, writes the backed-up `.env` to `.env.restored` (never overwrites yours), and adopts the backed-up `N8N_ENCRYPTION_KEY` only when no n8n data volume exists yet. Afterwards republish the assistant workflow so Telegram's webhook is registered again.
+
+Not backed up on purpose: the Caddy certificates (reissued automatically) and `n8n_files` (temporary audio). Hetzner also sells whole-server snapshots as an extra; check the current price on their site if you want a second layer.
+
 ### 9b. PC + Cloudflare Tunnel (free, for testing)
 
 ```bash

@@ -1,4 +1,6 @@
 .env
+.env.restored
+.backup.lock
 *.ogg
 *.wav
 *.pcm

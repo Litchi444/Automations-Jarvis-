@@ -42,6 +42,10 @@ else
   info "MODE" "local (assistant needs a public HTTPS URL or a tunnel; briefing works)"
 fi
 info "editor URL" "${url:-unknown}"
+case "$(env_get BACKUP_AGE_RECIPIENT)" in
+  age1*) info "backups (optional)" "age key set$( [ -n "$(env_get BACKUP_RCLONE_REMOTE)" ] && echo ', off-server copy on' || echo ', local only')" ;;
+  *)     info "backups (optional)" "BACKUP_AGE_RECIPIENT unset: no backups (README 9d)" ;;
+esac
 [ -n "$(env_get N8N_API_KEY)" ] && info "N8N_API_KEY (optional)" "set" || info "N8N_API_KEY (optional)" "unset: execution summaries disabled"
 
 exit "$FAILED"

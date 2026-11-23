@@ -68,7 +68,7 @@ log "System packages and unattended security updates"
 export DEBIAN_FRONTEND=noninteractive
 run apt-get update -qq
 run apt-get upgrade -y -qq
-run apt-get install -y -qq ca-certificates curl openssl python3 ufw unattended-upgrades
+run apt-get install -y -qq ca-certificates curl openssl python3 ufw unattended-upgrades age rclone
 run systemctl enable --now unattended-upgrades
 
 # ── 2. Docker ────────────────────────────────────────────────
@@ -181,7 +181,7 @@ else
   echo "    2. scripts/check-env.sh"
   echo "    3. docker compose --profile cloud up -d --build"
   echo "    4. scripts/stack-health.sh"
-  echo "    5. Back up N8N_ENCRYPTION_KEY somewhere other than this server"
+  echo "    5. Set up backups (README 9d): BACKUP_AGE_RECIPIENT in .env, then scripts/install-backup-timer.sh"
 fi
 
 [ "$WARN" = 0 ] && echo && echo "bootstrap finished without warnings" \
