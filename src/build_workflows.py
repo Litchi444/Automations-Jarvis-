@@ -308,7 +308,9 @@ def build_assistant():
         "options": {"systemMessage": SYSTEM_MESSAGE, "maxIterations": 8},
     })
     w.node("Gemini chat model", "@n8n/n8n-nodes-langchain.lmChatGoogleGemini", 1.2, [1760, 640], {
-        "modelName": "models/gemini-flash-latest", "options": {}})
+        # flash-lite: on the free tier gemini-flash-latest often returns 503 (high
+        # demand) and has a 5 req/min cap; one agent turn makes several calls.
+        "modelName": "models/gemini-flash-lite-latest", "options": {}})
     w.node("Chat memory", "@n8n/n8n-nodes-langchain.memoryPostgresChat", 1.4, [1900, 640], {
         "sessionIdType": "customKey",
         "sessionKey": "={{ $('Prepare agent input').first().json.sessionKey }}",

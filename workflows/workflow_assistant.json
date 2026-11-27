@@ -210,7 +210,7 @@
     },
     {
       "parameters": {
-        "modelName": "models/gemini-flash-latest",
+        "modelName": "models/gemini-flash-lite-latest",
         "options": {}
       },
       "id": "916fca94-3ae3-539f-adfc-d80ffdfa6c22",

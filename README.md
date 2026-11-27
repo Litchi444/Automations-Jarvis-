@@ -168,7 +168,7 @@ Telegram allows one webhook per bot. If you use *Listen for test event* in the e
 | Speak → Config | `ttsModel`, `voiceName`, `ttsStyle` | `gemini-3.1-flash-tts-preview`, `Kore` |
 | Briefing → Config | `textModel`, `language`, `maxChars` | `gemini-flash-lite-latest`, English, 300 |
 | Assistant → Config | `transcribeModel`, `proposalTtlHours` | `gemini-flash-lite-latest`, 12 |
-| Assistant → Gemini chat model | `modelName` | `models/gemini-flash-latest` |
+| Assistant → Gemini chat model | `modelName` | `models/gemini-flash-lite-latest` (on the free tier, `gemini-flash-latest` often fails with 503 "high demand" or the 5 requests/minute cap) |
 | Assistant → Chat memory | `contextWindowLength` | 12 messages |
 | Assistant → Jarvis | system message (persona, rules, output format) | |
 
@@ -267,7 +267,8 @@ Leave `.env` on `localhost` / `http`. The 07:30 briefing runs; the Telegram assi
 | `Unrecognized node type: executeCommand` | `docker compose up -d --force-recreate n8n` |
 | `access to env vars denied` | `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` must be set. Recreate the container |
 | `The file ... is not writable` | `docker compose exec -u root n8n chown -R node:node /home/node/.n8n-files` |
-| Jarvis replies with raw JSON or no cards | The model ignored the format. *Parse + validate* still answers. Try a stronger `modelName` |
+| Jarvis replies with raw JSON or no cards | The model ignored the format. *Parse + validate* still answers. Try a stronger `modelName` (e.g. `models/gemini-3-flash-preview`) |
+| Jarvis never answers; execution failed at *Gemini chat model* with 503 or 429 | Model overloaded or free-tier per-minute quota hit. Wait a minute, or switch `modelName` to a less busy model |
 | "I dropped N suggestions…" | The validator rejected malformed dates or types. See `rejectedProposals` in the execution |
 
 ## Development
