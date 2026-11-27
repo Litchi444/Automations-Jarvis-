@@ -8,12 +8,36 @@ const MAX_PROPOSALS = 3;
 const REPLY = { voice: 0, text: 1 };   // must match REPLY in src/build_workflows.py
 const raw = String($input.first().json.output ?? '');
 
+// Models often put raw line breaks inside JSON strings (e.g. an email draft),
+// which JSON.parse rejects. Escape control characters that sit inside strings.
+function escapeControlCharsInStrings(s) {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  for (const ch of s) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      else if (ch < ' ') {
+        out += ch === '\n' ? '\\n' : ch === '\r' ? '\\r' : ch === '\t' ? '\\t'
+          : '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0');
+        continue;
+      }
+    } else if (ch === '"') inString = true;
+    out += ch;
+  }
+  return out;
+}
+
 function extractJson(s) {
   const t = s.replace(/```(?:json)?/gi, '').trim();
   const a = t.indexOf('{');
   const b = t.lastIndexOf('}');
   if (a === -1 || b <= a) return null;
-  try { return JSON.parse(t.slice(a, b + 1)); } catch { return null; }
+  const body = t.slice(a, b + 1);
+  try { return JSON.parse(body); } catch { /* try the lenient pass */ }
+  try { return JSON.parse(escapeControlCharsInStrings(body)); } catch { return null; }
 }
 
 const clean = (v, max) => String(v ?? '')

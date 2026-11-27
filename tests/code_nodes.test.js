@@ -61,6 +61,8 @@ ok(o.reply.startsWith('Objet : TP 3\n\nBonjour Madame X,\nMerci. y') && o.reply.
 o = parse(JSON.stringify({ reply: 'Line one\nLine two ' + 'z'.repeat(2000), proposals: [] }));
 ok(o.reply.startsWith('Line one Line two') && o.reply.length === 1500, 'voice reply stays one paragraph, capped at 1500');
 ok(parse('```json\n' + JSON.stringify({ reply: 'ok', proposals: [] }) + '\n```').reply === 'ok', 'code-fenced JSON tolerated');
+o = parse('{"reply": "Objet : RDV\n\nBonjour,\n\tA demain.\n\nJarvis", "format": "text", "proposals": []}');
+ok(o.replyRoute === 1 && o.reply.startsWith('Objet : RDV\n\nBonjour,') && !o.reply.includes('"format"'), 'raw line breaks inside JSON strings tolerated');
 o = parse('Sure! Tomorrow you are free.');
 ok(o.reply === 'Sure! Tomorrow you are free.' && o.proposals.length === 0, 'non-JSON → answered, no proposals');
 o = parse(JSON.stringify({ reply: 'x', proposals: [
