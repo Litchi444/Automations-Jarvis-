@@ -120,12 +120,13 @@ report("telegram trigger: chat filter, taps, v>=1.4", bool(t_ok),
 route_src = A.get("Route update", {}).get("parameters", {}).get("jsCode", "")
 report("second chat-id gate in 'Route update'", "TELEGRAM_CHAT_ID" in route_src and "return []" in route_src)
 
-# 9. Generated JSON in sync with src/ -------------------------------------------
-srcs = {p.read_text(encoding="utf-8") for p in (ROOT / "src").rglob("*.js")} | {p.read_text(encoding="utf-8") for p in (ROOT / "src").rglob("*.sql")}
-stale = [f"{wf['name'][:12]}/{n['name']}" for wf in ALL for n in wf["nodes"]
-         if (n["parameters"].get("jsCode") and n["parameters"]["jsCode"] not in srcs)
-         or (n["parameters"].get("operation") == "executeQuery" and n["parameters"]["query"] not in srcs)]
-report("workflows in sync with src/ (regenerated)", not stale, ", ".join(stale[:3]))
+# 9. Generated JSON in sync with the generator (full in-memory rebuild) ----------
+sys.path.insert(0, str(ROOT / "src"))
+import build_workflows  # noqa: E402  (module import has no side effects)
+stale = [f for f, w in build_workflows.build_all().items()
+         if not (WF_DIR / f).exists()
+         or (WF_DIR / f).read_text(encoding="utf-8").replace("\r\n", "\n") != w.to_json()]
+report("workflows in sync with generator (regenerated)", not stale, ", ".join(stale))
 
 # 10. No secrets committed into workflows ---------------------------------------
 blob = "\n".join(json.dumps(w) for w in ALL)
@@ -149,8 +150,6 @@ extra = [n["name"] for n in uni["nodes"] if n["type"] not in UNI_ALLOWED]
 report("uni mail workflow: IMAP -> code -> postgres only", not extra, ", ".join(extra))
 
 # 13. Writing skills: generated SQL matches skills/*.md, and the agent only reads them ---
-sys.path.insert(0, str(ROOT / "src"))
-import build_workflows  # noqa: E402  (module import has no side effects)
 expected, n_skills = build_workflows.skills_sql()
 on_disk = build_workflows.SKILLS_SQL.read_text(encoding="utf-8").replace("\r\n", "\n") \
     if build_workflows.SKILLS_SQL.exists() else ""

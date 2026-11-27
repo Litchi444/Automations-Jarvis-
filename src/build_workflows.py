@@ -35,6 +35,18 @@ def read(rel: str) -> str:
     return (SRC / rel).read_text(encoding="utf-8")
 
 
+NODE_REF = re.compile(r"\$\('([^']+)'\)")
+
+
+def node_refs(value):
+    """Every $('Name') used anywhere in a node's parameters (code and expressions)."""
+    if isinstance(value, dict):
+        return {r for v in value.values() for r in node_refs(v)}
+    if isinstance(value, list):
+        return {r for v in value for r in node_refs(v)}
+    return set(NODE_REF.findall(value)) if isinstance(value, str) else set()
+
+
 class WF:
     def __init__(self, wid: str, name: str):
         self.wid, self.name = wid, name
@@ -58,7 +70,8 @@ class WF:
         for a, b in itertools.pairwise(names):
             self.link(a, b)
 
-    def write(self, filename):
+    def to_json(self) -> str:
+        """Validates the workflow and returns the exported JSON text. Writes nothing."""
         names = {n["name"] for n in self.nodes}
         assert len(names) == len(self.nodes), "duplicate node names"
         for src, kinds in self.connections.items():
@@ -67,6 +80,9 @@ class WF:
                 for edges in outs:
                     for e in edges:
                         assert e["node"] in names, f"{self.name}: unknown target {e['node']}"
+        for n in self.nodes:
+            for ref in node_refs(n["parameters"]):
+                assert ref in names, f"{self.name}: node '{n['name']}' references unknown node $('{ref}')"
         wf = {
             "id": self.wid, "name": self.name, "nodes": self.nodes,
             "connections": self.connections, "active": False,
@@ -74,8 +90,10 @@ class WF:
                          "saveDataErrorExecution": "all", "callerPolicy": "workflowsFromSameOwner"},
             "pinData": {}, "meta": {"templateCredsSetupCompleted": False}, "tags": [],
         }
-        (OUT / filename).write_text(json.dumps(wf, indent=2, ensure_ascii=False) + "\n",
-                                     encoding="utf-8", newline="\n")
+        return json.dumps(wf, indent=2, ensure_ascii=False) + "\n"
+
+    def write(self, filename):
+        (OUT / filename).write_text(self.to_json(), encoding="utf-8", newline="\n")
         print(f"wrote workflows/{filename}: {len(self.nodes)} nodes")
 
 
@@ -191,7 +209,7 @@ def build_speak():
     w.link("ffmpeg: WAV to OGG Opus", "Read OGG", 0)
     w.link("ffmpeg: WAV to OGG Opus", "Telegram: text fallback", 1)
     w.chain("Read OGG", "Telegram: sendVoice", "Clean up temp files")
-    w.write("workflow_speak.json")
+    return "workflow_speak.json", w
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -235,7 +253,7 @@ def build_briefing():
     w.node("Speak", "n8n-nodes-base.executeWorkflow", 1.2, [1540, 300], exec_speak())
     w.chain("Every day 07:30", "Config", "Get today events", "Get priority emails",
             "Get uni emails", "Build Gemini prompt", "Gemini: write script", "Clean script", "Speak")
-    w.write("workflow_morning_briefing.json")
+    return "workflow_morning_briefing.json", w
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -477,7 +495,7 @@ def build_assistant():
     for n in ("Mark executed", "Mark failed"):
         w.link(n, "Answer button")
         w.link(n, "Update card")
-    w.write("workflow_assistant.json")
+    return "workflow_assistant.json", w
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -500,7 +518,15 @@ def build_unimail():
         "assistant/sql/insert_uni_email.sql",
         "={{ [ $json.messageId, $json.from, $json.to, $json.subject, $json.body, $json.receivedAt ] }}"))
     w.chain("University inbox (IMAP)", "Normalize email", "Save uni email")
-    w.write("workflow_university_mail.json")
+    return "workflow_university_mail.json", w
+
+
+BUILDERS = (build_speak, build_briefing, build_assistant, build_unimail)
+
+
+def build_all():
+    """{filename: WF} for every workflow. Pure: writes nothing (the audit relies on this)."""
+    return dict(b() for b in BUILDERS)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -593,10 +619,8 @@ def lint_expressions():
 
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    build_speak()
-    build_briefing()
-    build_assistant()
-    build_unimail()
+    for filename, w in build_all().items():
+        w.write(filename)
     build_skills()
     lint_expressions()
     print("expression lint OK")
