@@ -1,5 +1,5 @@
 """Generates the four n8n workflow exports in workflows/ from the sources in src/,
-and docker/postgres/init/02-skills.sql from skills/*.md.
+docker/postgres/init/02-skills.sql from skills/*.md and 03-styles.sql from styles/*.md.
 
     python3 src/build_workflows.py
 
@@ -31,7 +31,7 @@ GEMINI_AUTH = {"authentication": "genericCredentialType", "genericAuthType": "ht
 PRIMARY_CAL = {"__rl": True, "mode": "list", "value": "primary", "cachedResultName": "Primary calendar"}
 # Switch output indices. The Code node that feeds each Switch must declare the
 # identical JS constant (checked by code()), so JS and wiring cannot drift.
-ROUTE = {"voice": 0, "text": 1, "callback": 2}  # "Route update" -> "Route"
+ROUTE = {"voice": 0, "text": 1, "callback": 2, "style": 3}  # "Route update" -> "Route"
 REPLY = {"voice": 0, "text": 1}                  # "Parse + validate" -> "Voice or text?"
 OUTCOME = {"create": 0, "cardOnly": 1}           # "Decision outcome" -> "Approved?" (0 = write gate, audited)
 
@@ -322,7 +322,11 @@ def build_assistant():
     }, retryOnFail=True, maxTries=2, waitBetweenTries=3000)
 
     # ── Agent ───────────────────────────────────────────────
-    w.node("Prepare agent input", "n8n-nodes-base.code", 2, [1700, 400],
+    # Answer style chosen with /style. Always one row; a failed lookup falls back to the default.
+    w.node("Load style", "n8n-nodes-base.postgres", 2.6, [1600, 400], pg_query(
+        "assistant/sql/load_style.sql", f"={{{{ [ {route}.chatId ] }}}}"),
+        onError="continueRegularOutput")
+    w.node("Prepare agent input", "n8n-nodes-base.code", 2, [1760, 400],
            code("assistant/prepare_agent_input.js"))
     w.node("Jarvis", "@n8n/n8n-nodes-langchain.agent", 3.1, [1920, 400], {
         "promptType": "define",
@@ -413,6 +417,14 @@ def build_assistant():
         "  ]] }\n"
         "}) }}"), retryOnFail=True, maxTries=3, waitBetweenTries=3000)
 
+    # ── /style command: plain node, the agent never writes the setting ──
+    w.node("Set style", "n8n-nodes-base.postgres", 2.6, [820, 1160], pg_query(
+        "assistant/sql/set_style.sql", "={{ [ $json.chatId, $json.styleArg ] }}"))
+    w.node("Send style reply", "n8n-nodes-base.httpRequest", 4.2, [1040, 1160], http_json(
+        "POST", f"={TG}/sendMessage",
+        f"={{{{ JSON.stringify({{ chat_id: {route}.chatId, text: $json.reply }}) }}}}"),
+        retryOnFail=True, maxTries=3, waitBetweenTries=3000)
+
     # ── Button tap → atomic decision → deterministic execution ──
     w.node("Claim decision", "n8n-nodes-base.postgres", 2.6, [820, 880], pg_query(
         "assistant/sql/claim_decision.sql",
@@ -456,10 +468,12 @@ def build_assistant():
     w.link("Route", "Show typing", ROUTE["voice"])
     w.link("Route", "Get voice file path", ROUTE["voice"])
     w.link("Route", "Show typing", ROUTE["text"])
-    w.link("Route", "Prepare agent input", ROUTE["text"])
+    w.link("Route", "Load style", ROUTE["text"])
     w.link("Route", "Claim decision", ROUTE["callback"])
-    w.chain("Get voice file path", "Download voice", "Audio to base64", "Gemini: transcribe",
-            "Prepare agent input", "Jarvis", "Parse + validate")
+    w.link("Route", "Set style", ROUTE["style"])
+    w.chain("Get voice file path", "Download voice", "Audio to base64", "Gemini: transcribe", "Load style")
+    w.chain("Load style", "Prepare agent input", "Jarvis", "Parse + validate")
+    w.link("Set style", "Send style reply")
     w.link("Gemini chat model", "Jarvis", kind="ai_languageModel")
     w.link("Chat memory", "Jarvis", kind="ai_memory")
     for tool in ("Calendar: list events", "Gmail: search", "Gmail: read email",
@@ -514,29 +528,39 @@ def build_all():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 5) SKILLS: skills/*.md → docker/postgres/init/02-skills.sql
+# 5) GUIDES: skills/*.md → 02-skills.sql, styles/*.md → 03-styles.sql
+#    Same file format: '---' front matter with one 'description:' line, then the body.
 # ═══════════════════════════════════════════════════════════════════
-SKILLS_DIR = ROOT / "skills"
-SKILLS_SQL = ROOT / "docker" / "postgres" / "init" / "02-skills.sql"
-SKILL_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+INIT_DIR = ROOT / "docker" / "postgres" / "init"
+SKILLS_DIR, SKILLS_SQL = ROOT / "skills", INIT_DIR / "02-skills.sql"
+STYLES_DIR, STYLES_SQL = ROOT / "styles", INIT_DIR / "03-styles.sql"
+GUIDE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+# A style body is added to the system prompt on every message: keep it short.
+GUIDES = {
+    "skills": {"dir": SKILLS_DIR, "sql": SKILLS_SQL, "max_body": 20000, "reserved": ()},
+    "styles": {"dir": STYLES_DIR, "sql": STYLES_SQL, "max_body": 2000, "reserved": ("off",)},
+}
 
 
-def parse_skill(path):
-    """skills/<name>.md with a '---' front matter holding one 'description:' line."""
+def parse_guide(path, kind="skills"):
+    """<kind>/<name>.md with a '---' front matter holding one 'description:' line."""
+    g, where = GUIDES[kind], f"{kind}/{path.name}"
     text = path.read_text(encoding="utf-8").replace("\r\n", "\n").lstrip("﻿")
     m = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
     if not m:
-        raise SystemExit(f"skills/{path.name}: missing '---' front matter")
+        raise SystemExit(f"{where}: missing '---' front matter")
     meta = dict(line.split(":", 1) for line in m.group(1).splitlines() if ":" in line)
     name, desc, body = path.stem, meta.get("description", "").strip(), m.group(2).strip()
-    if not SKILL_NAME.match(name):
-        raise SystemExit(f"skills/{path.name}: file name must be lowercase letters, digits and '-'")
+    if not GUIDE_NAME.match(name):
+        raise SystemExit(f"{where}: file name must be lowercase letters, digits and '-'")
+    if name in g["reserved"]:
+        raise SystemExit(f"{where}: '{name}' is a reserved name")
     if not desc or len(desc) > 300:
-        raise SystemExit(f"skills/{path.name}: description must be 1-300 characters")
-    if not body or len(body) > 20000:
-        raise SystemExit(f"skills/{path.name}: body must be 1-20000 characters")
+        raise SystemExit(f"{where}: description must be 1-300 characters")
+    if not body or len(body) > g["max_body"]:
+        raise SystemExit(f"{where}: body must be 1-{g['max_body']} characters")
     if "\x00" in desc + body:
-        raise SystemExit(f"skills/{path.name}: contains a NUL character")
+        raise SystemExit(f"{where}: contains a NUL character")
     return name, desc, body
 
 
@@ -545,39 +569,50 @@ def sql_str(s):
     return "'" + s.replace("'", "''") + "'"
 
 
-def skills_sql():
-    """Returns (sql_text, skill_count). The audit compares this with the committed file."""
-    skills = [parse_skill(p) for p in sorted(SKILLS_DIR.glob("*.md"))]
+def guides_sql(kind):
+    """Returns (sql_text, count) for skills or styles. The audit compares this with the committed file."""
+    g = GUIDES[kind]
+    table, fname = f"assistant.{kind}", g["sql"].name
+    items = [parse_guide(p, kind) for p in sorted(g["dir"].glob("*.md"))]
     lines = [
-        "-- GENERATED by src/build_workflows.py from skills/*.md. Edit those files, then regenerate.",
+        f"-- GENERATED by src/build_workflows.py from {kind}/*.md. Edit those files, then regenerate.",
         "-- Runs automatically on a FRESH postgres volume, after 01-assistant.sql.",
-        "-- Existing volume? Re-apply after every skills change (idempotent, removes deleted skills):",
+        f"-- Existing volume? Re-apply after every {kind} change (idempotent, removes deleted {kind}):",
         "--   docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U \"$POSTGRES_USER\" "
-        "-d \"$POSTGRES_DB\" -f /docker-entrypoint-initdb.d/02-skills.sql'",
+        f"-d \"$POSTGRES_DB\" -f /docker-entrypoint-initdb.d/{fname}'",
         "BEGIN;",
     ]
-    if skills:
-        names = ", ".join(sql_str(n) for n, _, _ in skills)
-        rows = ",\n".join(f"({sql_str(n)},\n {sql_str(d)},\n {sql_str(b)})" for n, d, b in skills)
+    if items:
+        names = ", ".join(sql_str(n) for n, _, _ in items)
+        rows = ",\n".join(f"({sql_str(n)},\n {sql_str(d)},\n {sql_str(b)})" for n, d, b in items)
         lines += [
-            f"DELETE FROM assistant.skills WHERE name NOT IN ({names});",
-            "INSERT INTO assistant.skills (name, description, body) VALUES",
+            f"DELETE FROM {table} WHERE name NOT IN ({names});",
+            f"INSERT INTO {table} (name, description, body) VALUES",
             rows,
             "ON CONFLICT (name) DO UPDATE",
             "   SET description = EXCLUDED.description, body = EXCLUDED.body, updated_at = now()",
-            " WHERE (assistant.skills.description, assistant.skills.body)",
+            f" WHERE ({table}.description, {table}.body)",
             "       IS DISTINCT FROM (EXCLUDED.description, EXCLUDED.body);",
         ]
     else:
-        lines.append("DELETE FROM assistant.skills;")
+        lines.append(f"DELETE FROM {table};")
     lines.append("COMMIT;")
-    return "\n".join(lines) + "\n", len(skills)
+    return "\n".join(lines) + "\n", len(items)
 
 
-def build_skills():
-    text, count = skills_sql()
-    SKILLS_SQL.write_text(text, encoding="utf-8", newline="\n")
-    print(f"wrote {SKILLS_SQL.relative_to(ROOT).as_posix()}: {count} skill(s)")
+def skills_sql():
+    return guides_sql("skills")
+
+
+def styles_sql():
+    return guides_sql("styles")
+
+
+def build_guides():
+    for kind, g in GUIDES.items():
+        text, count = guides_sql(kind)
+        g["sql"].write_text(text, encoding="utf-8", newline="\n")
+        print(f"wrote {g['sql'].relative_to(ROOT).as_posix()}: {count} {kind[:-1]}(s)")
 
 
 def lint_expressions():
@@ -605,6 +640,6 @@ if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
     for filename, w in build_all().items():
         w.write(filename)
-    build_skills()
+    build_guides()
     lint_expressions()
     print("expression lint OK")

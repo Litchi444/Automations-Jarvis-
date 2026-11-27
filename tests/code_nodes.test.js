@@ -29,17 +29,31 @@ ok(o[0].json.route === 2 && o[0].json.action === 'approve' && o[0].json.proposal
 ok(T(cb('no:42'))[0].json.action === 'decline', 'decline tap');
 ok(T(cb('ap:42; DROP TABLE x')).length === 0, 'malformed callback data → dropped');
 ok(T(cb('ap:42', 111, 999)).length === 0, 'tap from someone else → dropped');
+o = T(priv({ text: '/style' }));
+ok(o[0].json.route === 3 && o[0].json.kind === 'style' && o[0].json.styleArg === '', '/style → route 3, list (empty arg)');
+o = T(priv({ text: '  /style   Butler  ' }));
+ok(o[0].json.route === 3 && o[0].json.styleArg === 'Butler', '/style <name> → route 3 with trimmed arg');
+ok(T(priv({ text: '/style@JarvisBot off' }))[0].json.styleArg === 'off', '/style@bot off → arg off');
+ok(T(priv({ text: '/style ' + 'a'.repeat(200) }))[0].json.styleArg.length === 64, 'style arg capped at 64 chars');
+ok(T(priv({ text: '/styles please' }))[0].json.route === 1 && T(priv({ text: 'change your /style' }))[0].json.route === 1, 'not the exact command → normal text to the agent');
+ok(T({ message: { chat: { id: 999, type: 'private' }, from: { id: 999 }, text: '/style butler' } }).length === 0, '/style from a stranger → dropped');
 let threw = false; try { run(R, { 'Telegram Trigger': [priv({ text: 'x' })] }, {}, {}); } catch { threw = true; }
 ok(threw, 'missing TELEGRAM_CHAT_ID → hard error, never open to everyone');
 
 console.log('prepare_agent_input');
-o = run('assistant/prepare_agent_input.js', { 'Route update': [{ kind: 'voice', chatId: '111' }] },
-  { candidates: [{ content: { parts: [{ text: 'Qu\'est-ce que j\'ai demain ?' }] } }] });
+const PA = 'assistant/prepare_agent_input.js';
+const noStyle = { style: null, body: null };
+o = run(PA, { 'Route update': [{ kind: 'voice', chatId: '111' }], 'Gemini: transcribe': [{ candidates: [{ content: { parts: [{ text: 'Qu\'est-ce que j\'ai demain ?' }] } }] }] }, noStyle);
 ok(o[0].json.userText.startsWith("Qu'est-ce") && o[0].json.inputMode === 'voice' && o[0].json.sessionKey === 'telegram-111', 'voice transcript → userText, session key');
-o = run('assistant/prepare_agent_input.js', { 'Route update': [{ kind: 'voice', chatId: '111' }] }, { candidates: [] });
+ok(o[0].json.style === '' && o[0].json.styleBody === '', 'no style chosen → empty style');
+o = run(PA, { 'Route update': [{ kind: 'voice', chatId: '111' }], 'Gemini: transcribe': [{ candidates: [] }] }, noStyle);
 ok(/inaudible/.test(o[0].json.userText), 'empty transcript → inaudible marker');
-o = run('assistant/prepare_agent_input.js', { 'Route update': [{ kind: 'text', chatId: '111', text: 'hi' }] }, {});
-ok(o[0].json.userText === 'hi' && o[0].json.inputMode === 'text', 'text passes through');
+o = run(PA, { 'Route update': [{ kind: 'text', chatId: '111', text: 'hi' }] }, noStyle);
+ok(o[0].json.userText === 'hi' && o[0].json.inputMode === 'text', 'text passes through (transcribe node not touched)');
+o = run(PA, { 'Route update': [{ kind: 'text', chatId: '111', text: 'hi' }] }, { style: 'butler', body: '  Be formal.  ' + 'x'.repeat(3000) });
+ok(o[0].json.style === 'butler' && o[0].json.styleBody.startsWith('Be formal.') && o[0].json.styleBody.length === 2000, 'chosen style → name + trimmed body, capped at 2000');
+o = run(PA, { 'Route update': [{ kind: 'text', chatId: '111', text: 'hi' }] }, { error: 'relation "assistant.styles" does not exist' });
+ok(o[0].json.style === '' && o[0].json.styleBody === '' && o[0].json.userText === 'hi', 'failed style lookup → default style, still answers');
 
 console.log('parse_agent_output');
 const day = 86400e3, iso = ms => new Date(ms).toISOString().replace('Z', '+00:00');

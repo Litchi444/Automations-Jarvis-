@@ -125,6 +125,12 @@ docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USE
 docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /docker-entrypoint-initdb.d/02-skills.sql'
 ```
 
+**Answer styles.** A style changes how Jarvis talks to you (tone, length, personality) on every reply, not just drafts. Styles live in `styles/<name>.md`, same format as skills (body up to 2000 characters, since it is added to every prompt; `off` is reserved). In Telegram: `/style` lists them and shows the current one, `/style butler` picks one, `/style off` goes back to the default. The command is handled by a plain workflow node; the agent can read the active style but never change it, and the style never overrides the safety or output rules, nor drafts written with a skill. After adding or editing a style, rebuild (regenerates `docker/postgres/init/03-styles.sql`), deploy, and load it (idempotent; deleting a style resets chats that used it to the default). On an existing volume, re-apply `01-assistant.sql` once first to create the `styles` and `chat_settings` tables:
+
+```bash
+docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /docker-entrypoint-initdb.d/03-styles.sql'
+```
+
 Open the editor and create the owner account.
 
 ## 4. Google OAuth client

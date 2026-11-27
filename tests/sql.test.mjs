@@ -96,6 +96,38 @@ try {
   await c.query(skillsSql);
   ok(await countSkills() === nSkills, 'skills SQL removes skills deleted from skills/');
 
+  // Answer styles (generated from styles/*.md) + the /style command
+  const stylesSql = fs.readFileSync(path.join(P, 'docker/postgres/init/03-styles.sql'), 'utf8');
+  const styleNames = fs.readdirSync(path.join(P, 'styles')).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
+  await c.query(stylesSql); await c.query(stylesSql);
+  const countStyles = async () => (await c.query('select count(*)::int n from assistant.styles')).rows[0].n;
+  ok(styleNames.length > 0 && await countStyles() === styleNames.length, `styles SQL runs twice (idempotent), ${styleNames.length} style(s) loaded`);
+  bad = false; try { await c.query("insert into assistant.styles (name, description, body) values ('off', 'd', 'b')"); } catch { bad = true; }
+  ok(bad, "'off' is reserved, not a style name");
+  const setStyle = (arg, chat = '111') => q(sql('set_style.sql'), [chat, arg]).then(r => r.rows);
+  const loadStyle = (chat = '111') => q(sql('load_style.sql'), [chat]).then(r => r.rows);
+  r = await loadStyle();
+  ok(r.length === 1 && r[0].style === null && r[0].body === null, 'load: no setting yet → one row, default (nulls)');
+  r = await setStyle('');
+  ok(r.length === 1 && r[0].reply.includes('Current style: default') && styleNames.every(n => r[0].reply.includes(n)), '/style → lists every style + current');
+  const pick = styleNames[0];
+  r = await setStyle(`  ${pick.toUpperCase()} `);
+  ok(r.length === 1 && r[0].reply.startsWith(`Style set: ${pick}.`), '/style <name> → set (trimmed, case-insensitive)');
+  r = await loadStyle();
+  ok(r.length === 1 && r[0].style === pick && r[0].body.length > 0, 'load: returns the chosen style body');
+  ok((await loadStyle('222'))[0].style === null, 'load: other chat unaffected');
+  r = await setStyle("nope' or '1'='1");
+  ok(r[0].reply.startsWith('Unknown style') && (await loadStyle())[0].style === pick, 'unknown / injected name → refused, setting unchanged');
+  r = await setStyle('off');
+  ok(r[0].reply === 'Style reset to the default.' && (await loadStyle())[0].style === null, '/style off → back to default');
+  r = await setStyle('off');
+  ok(r[0].reply === 'Style reset to the default.', '/style off twice → still fine');
+  await c.query("insert into assistant.styles (name, description, body) values ('zz-gone', 'temp', 'Temp body')");
+  await setStyle('zz-gone');
+  await c.query(stylesSql);
+  r = await loadStyle();
+  ok(r.length === 1 && r[0].style === null && await countStyles() === styleNames.length, 'style deleted from styles/ → chats using it fall back to default');
+
   console.log((await c.query('select id,status from assistant.decision_log')).rows.map(x => `${x.id}:${x.status}`).join(' '));
   await c.end();
 } finally { await db.stop(); }

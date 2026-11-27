@@ -49,6 +49,24 @@ CREATE TABLE IF NOT EXISTS assistant.skills (
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
 
+-- Answer styles: how Jarvis talks to the user (tone, length, personality).
+-- Source of truth: styles/*.md in the repo, loaded by the generated 03-styles.sql.
+-- 'off' is reserved: "/style off" goes back to the default.
+CREATE TABLE IF NOT EXISTS assistant.styles (
+    name        text        PRIMARY KEY CHECK (name ~ '^[a-z0-9][a-z0-9-]{0,62}$' AND name <> 'off'),
+    description text        NOT NULL,
+    body        text        NOT NULL,
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- The style chosen per chat. Written ONLY by the "/style" command node (plain workflow
+-- node, never the agent). Deleting a style from styles/ resets chats using it to default.
+CREATE TABLE IF NOT EXISTS assistant.chat_settings (
+    chat_id     text        PRIMARY KEY,
+    style       text        REFERENCES assistant.styles (name) ON DELETE SET NULL,
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
 -- Handy audit view: what did I approve / decline lately?
 CREATE OR REPLACE VIEW assistant.decision_log AS
 SELECT id, kind, status, summary, created_at, decided_at, result

@@ -158,4 +158,21 @@ skill_tools = [t for t in tools if "assistant.skills" in A[t]["parameters"].get(
 report("skills reachable only via read-only agent tools", len(skill_tools) == 2,
        ", ".join(skill_tools) or "missing")
 
+# 14. Answer styles: generated SQL in sync, the setting is written only by the /style command --
+expected, n_styles = build_workflows.styles_sql()
+on_disk = build_workflows.STYLES_SQL.read_text(encoding="utf-8").replace("\r\n", "\n") \
+    if build_workflows.STYLES_SQL.exists() else ""
+report("03-styles.sql in sync with styles/ (regenerated)", on_disk == expected, f"{n_styles} style(s)")
+style_tools = [t for t in tools if re.search(r"assistant\.(styles|chat_settings)", A[t]["parameters"].get("query", ""))]
+report("agent has no tool on styles / chat_settings", not style_tools, ", ".join(style_tools))
+setting_writers = [n["name"] for wf in ALL for n in wf["nodes"]
+                   if "chat_settings" in n["parameters"].get("query", "")
+                   and re.search(r"\b(INSERT|UPDATE|DELETE)\b", n["parameters"].get("query", ""), re.I)]
+style_route = build_workflows.ROUTE["style"]
+fed_by_route = {t for s, i, t in edges(asst) if s == "Route" and i == style_route}
+report("style setting written only from Route 'style' output",
+       setting_writers == ["Set style"] and fed_by_route == {"Set style"}
+       and all(s == "Route" for s, _, t in edges(asst) if t == "Set style"),
+       ", ".join(setting_writers) or "no writer")
+
 sys.exit(1 if failed else 0)

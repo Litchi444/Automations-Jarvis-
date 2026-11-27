@@ -5,7 +5,7 @@
 //
 // Output `route`: see ROUTE (must match ROUTE in src/build_workflows.py).
 
-const ROUTE = { voice: 0, text: 1, callback: 2 };
+const ROUTE = { voice: 0, text: 1, callback: 2, style: 3 };
 
 const allowed = String($env.TELEGRAM_CHAT_ID || '').trim();
 if (!allowed) throw new Error('TELEGRAM_CHAT_ID is not set in the environment');
@@ -63,6 +63,12 @@ if (audio) {
 }
 
 if (typeof msg.text === 'string' && msg.text.trim()) {
+  // "/style", "/style butler", "/style off" (also "/style@BotName ..."): handled by a plain
+  // workflow node, never by the agent. The argument is only a bind value for set_style.sql.
+  const cmd = msg.text.trim().match(/^\/style(?:@\w+)?(?:\s+([\s\S]*))?$/i);
+  if (cmd) {
+    return [{ json: { route: ROUTE.style, kind: 'style', chatId, styleArg: String(cmd[1] || '').trim().slice(0, 64) } }];
+  }
   const text = msg.text.trim() === '/start' ? 'Hello! Briefly introduce yourself.' : msg.text.trim();
   return [{ json: { route: ROUTE.text, kind: 'text', chatId, text } }];
 }
