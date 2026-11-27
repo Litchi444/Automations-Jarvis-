@@ -15,18 +15,20 @@ Self-hosted n8n 2.x stack: Telegram voice/text assistant ("Jarvis") with human-a
 - Newer Gemini text models reject `temperature`/`top_p`/`top_k`.
 
 ## Rules
-- Edit `src/**/*.js` and `src/assistant/sql/*.sql`, then `python3 src/build_workflows.py`. Never hand-edit jsCode/query strings in the JSON.
+- Edit `src/**/*.js`, `src/assistant/sql/*.sql` and `src/assistant/system_message.txt` (agent system prompt, n8n expression syntax: `{{ }}` allowed), then `python3 src/build_workflows.py`. Never hand-edit jsCode/query/prompt strings in the JSON.
 - Writing skills live in `skills/*.md`; the build generates `docker/postgres/init/02-skills.sql` (never hand-edit). Agent reads them via two SELECT-only `postgresTool`s.
 - Node names are referenced via `$('Name')`. If you rename a node, update every reference (the tests mock them by name).
 - Workflow IDs are fixed (`mbSpeakVoiceNote`, `mbMorningBrief01`, `mbAssistant00001`, `mbUniMailIngest1`) because workflows call each other by ID.
 - University mail: IMAP trigger must keep `postProcessAction: "nothing"` (never mark/move mail). Agent reads the Postgres copy only via fixed SELECT `postgresTool` queries (audited).
 - Secrets only in `.env` or n8n credentials.
-- After changes: `cd tests && npm test` must pass.
+- After changes: `cd tests && npm test` and `npm run lint` must pass (and `ruff check src scripts` when Python changed).
 
 ## Commands
 ```bash
 python3 src/build_workflows.py
 cd tests && npm install && npm test
+cd tests && npm run lint        # ESLint: Code-node JS (n8n globals, top-level return) + tests
+uvx ruff check src scripts      # or: python3 -m ruff check src scripts
 docker compose --profile cloud up -d --build
 docker compose exec n8n n8n import:workflow --separate --input=/workflows
 docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /docker-entrypoint-initdb.d/01-assistant.sql'

@@ -5,6 +5,7 @@
 const ctx = $('Prepare agent input').first().json;
 const tz = $env.GENERIC_TIMEZONE || 'Europe/Paris';
 const MAX_PROPOSALS = 3;
+const REPLY = { voice: 0, text: 1 };   // must match REPLY in src/build_workflows.py
 const raw = String($input.first().json.output ?? '');
 
 function extractJson(s) {
@@ -120,7 +121,7 @@ return [{
   json: {
     chatId: ctx.chatId,
     inputMode: ctx.inputMode,
-    replyRoute: wantsText ? 1 : 0,                   // 0 = voice reply (default), 1 = text reply
+    replyRoute: wantsText ? REPLY.text : REPLY.voice, // voice is the default
     text: reply,                                     // "Speak" sub-workflow input contract
     reply,
     proposals: valid,

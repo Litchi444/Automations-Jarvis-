@@ -3,7 +3,9 @@
 // first gate; this is the second. Anything not from your private chat is
 // dropped silently (returning [] ends the execution).
 //
-// Output `route`: 0 = voice, 1 = text, 2 = button tap (callback)
+// Output `route`: see ROUTE (must match ROUTE in src/build_workflows.py).
+
+const ROUTE = { voice: 0, text: 1, callback: 2 };
 
 const allowed = String($env.TELEGRAM_CHAT_ID || '').trim();
 if (!allowed) throw new Error('TELEGRAM_CHAT_ID is not set in the environment');
@@ -23,7 +25,7 @@ if (u.callback_query) {
 
   return [{
     json: {
-      route: 2,
+      route: ROUTE.callback,
       kind: 'callback',
       chatId,
       callbackId: cq.id,
@@ -46,12 +48,12 @@ if (msg.chat?.type !== 'private' || chatId !== allowed || String(msg.from?.id ??
 const audio = msg.voice || msg.audio;
 if (audio) {
   if ((audio.duration || 0) > MAX_VOICE_SECONDS) {
-    return [{ json: { route: 1, kind: 'text', chatId,
+    return [{ json: { route: ROUTE.text, kind: 'text', chatId,
       text: `[System note: the user sent a voice message longer than ${MAX_VOICE_SECONDS / 60} minutes, which was not processed. Ask them to send a shorter one.]` } }];
   }
   return [{
     json: {
-      route: 0,
+      route: ROUTE.voice,
       kind: 'voice',
       chatId,
       fileId: audio.file_id,
@@ -62,7 +64,7 @@ if (audio) {
 
 if (typeof msg.text === 'string' && msg.text.trim()) {
   const text = msg.text.trim() === '/start' ? 'Hello! Briefly introduce yourself.' : msg.text.trim();
-  return [{ json: { route: 1, kind: 'text', chatId, text } }];
+  return [{ json: { route: ROUTE.text, kind: 'text', chatId, text } }];
 }
 
 return []; // stickers, photos, etc.: ignored

@@ -11,9 +11,9 @@ your row when done.
 |------|-------|----------|--------|------------|--------|
 | 001 | Validate `$('Node')` references at build time | P1 | S | — | DONE |
 | 002 | Audit compares full in-memory regeneration with committed JSON | P1 | S–M | 001 | DONE |
-| 003 | ESLint + ruff lint baseline | P2 | M | — | TODO |
-| 004 | Move Jarvis system prompt into `src/assistant/system_message.txt` | P3 | S | 002 | TODO |
-| 005 | Declare Switch route indices once, checked at build | P3 | S–M | 001 | TODO |
+| 003 | ESLint + ruff lint baseline | P2 | M | — | DONE (no-control-regex off for src/, intentional stripping; ruff E501 ignored) |
+| 004 | Move Jarvis system prompt into `src/assistant/system_message.txt` | P3 | S | 002 | DONE |
+| 005 | Declare Switch route indices once, checked at build | P3 | S–M | 001 | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 

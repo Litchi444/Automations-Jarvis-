@@ -5,10 +5,14 @@
   "scripts": {
     "test:code": "node code_nodes.test.js",
     "test:sql": "node sql.test.mjs",
-    "test": "npm run test:code && npm run test:sql"
+    "test": "npm run test:code && npm run test:sql",
+    "lint": "cd .. && eslint --config tests/eslint.config.mjs src tests/code_nodes.test.js tests/sql.test.mjs tests/eslint.config.mjs"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "embedded-postgres": "*",
+    "eslint": "^9.39.5",
+    "globals": "^15.15.0",
     "pg": "*"
   }
 }

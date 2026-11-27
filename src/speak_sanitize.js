@@ -7,7 +7,7 @@ const forSpeech = s => String(s ?? '')
   .replace(/https?:\/\/\S+/gi, '')              // URLs
   .replace(/\S+@\S+\.\S+/g, '')                  // email addresses
   .replace(/^\s*[-•*]\s+/gm, '')                 // bullet markers
-  .replace(/[*_#`>~|\[\]{}<>]/g, '')             // markdown / display chars
+  .replace(/[*_#`>~|[\]{}<>]/g, '')              // markdown / display chars
   .replace(/\p{Extended_Pictographic}/gu, '')    // emojis
   .replace(/\s[-–—]\s/g, ', ')                   // inline dashes -> pause
   .replace(/\s+/g, ' ')

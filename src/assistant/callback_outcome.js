@@ -1,13 +1,16 @@
 // Code node "Decision outcome" (Run Once for All Items)
 // Input: the row returned by the atomic "Claim decision" query, or an empty
 // item if the proposal doesn't exist (node has alwaysOutputData on).
-// Output `route`: 0 = create the event, 1 = just update the card.
+// Output `route`: OUTCOME.create = create the event, OUTCOME.cardOnly = just update the card
+// (must match OUTCOME in src/build_workflows.py).
+
+const OUTCOME = { create: 0, cardOnly: 1 };
 
 const r = $('Route update').first().json;
 const row = $input.first().json || {};
 const base = row.summary || 'This suggestion';
 
-let route = 1;
+let route = OUTCOME.cardOnly;
 let toast;
 let editText;
 
@@ -15,7 +18,7 @@ if (!row.id) {
   toast = 'Suggestion not found';
   editText = `${base}\n\n⚠️ This suggestion no longer exists.`;
 } else if (row.ok && row.status === 'approved') {
-  route = 0;
+  route = OUTCOME.create;
   toast = 'Adding…';
   editText = null; // set by "Mark executed" / "Mark failed"
 } else if (row.ok && row.status === 'declined') {

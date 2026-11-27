@@ -1,0 +1,9 @@
+# 3.10+: src/build_workflows.py uses itertools.pairwise.
+target-version = "py310"
+line-length = 120
+exclude = ["tests/node_modules", "workflows"]
+
+[lint]
+select = ["E", "F", "W", "B"]
+# Long lines are n8n expression strings and prompt text; wrapping them hurts readability.
+ignore = ["E501"]
