@@ -255,6 +255,10 @@ def build_briefing():
     w.node("Get uni emails", "n8n-nodes-base.postgres", 2.6, [770, 300],
            pg_query("assistant/sql/recent_uni_emails.sql"),
            alwaysOutputData=True, executeOnce=True, onError="continueRegularOutput")
+    # Answer style chosen with /style in the assistant chat. Never blocks the briefing.
+    w.node("Get style", "n8n-nodes-base.postgres", 2.6, [825, 300],
+           pg_query("assistant/sql/load_style.sql", "={{ [ String($env.TELEGRAM_CHAT_ID || '') ] }}"),
+           alwaysOutputData=True, executeOnce=True, onError="continueRegularOutput")
     w.node("Build Gemini prompt", "n8n-nodes-base.code", 2, [880, 300], code("build_prompt.js"))
     w.node("Gemini: write script", "n8n-nodes-base.httpRequest", 4.2, [1100, 300], {
         **http_json("POST",
@@ -265,7 +269,7 @@ def build_briefing():
     w.node("Clean script", "n8n-nodes-base.code", 2, [1320, 300], code("clean_script.js"))
     w.node("Speak", "n8n-nodes-base.executeWorkflow", 1.2, [1540, 300], exec_speak())
     w.chain("Every day 07:30", "Config", "Get today events", "Get priority emails",
-            "Get uni emails", "Build Gemini prompt", "Gemini: write script", "Clean script", "Speak")
+            "Get uni emails", "Get style", "Build Gemini prompt", "Gemini: write script", "Clean script", "Speak")
     return "workflow_morning_briefing.json", w
 
 

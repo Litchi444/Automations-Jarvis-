@@ -1,4 +1,5 @@
--- "Load style": the answer style chosen with /style for this chat. $1 chat id.
+-- "Load style" (assistant) and "Get style" (morning briefing): the answer style chosen
+-- with /style for this chat. $1 chat id.
 -- Always returns exactly one row; style and body are NULL when none is chosen.
 SELECT s.name AS style, s.body
   FROM (SELECT 1) AS one

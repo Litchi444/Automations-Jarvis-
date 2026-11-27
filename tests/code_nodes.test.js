@@ -149,13 +149,18 @@ ok(NE({}, null).length === 0, 'empty items skipped');
 ok(NE({ textPlain: 'y'.repeat(30000), subject: 's' })[0].json.body.length === 20000, 'body capped at 20k chars');
 
 console.log('build_prompt (briefing)');
-const BP = uni => run('build_prompt.js', {
+const BP = (uni, style = { style: null, body: null }) => run('build_prompt.js', {
   Config: [{ maxChars: 300, language: 'English', timezone: 'Europe/Paris' }],
-  'Get today events': [{}], 'Get priority emails': [{}], 'Get uni emails': uni,
+  'Get today events': [{}], 'Get priority emails': [{}], 'Get uni emails': uni, 'Get style': [style],
 })[0].json;
+const sysText = b => b.geminiRequest.systemInstruction.parts[0].text;
 o = BP([{ id: 3, from_addr: '"Scolarité" <scol@univ-lemans.fr>', subject: 'Rendu TP', preview: 'Rendu  lundi' }]);
 const ut = o.geminiRequest.contents[0].parts[0].text;
 ok(o.uniEmailCount === 1 && /UNIVERSITY EMAILS, LAST 24 HOURS \(1\):\n- From: Scolarité \| Subject: Rendu TP \| Preview: Rendu lundi/.test(ut), 'uni emails listed in prompt');
 ok(BP([{}]).uniEmailCount === 0 && BP([{ error: { message: 'relation does not exist' } }]).uniEmailCount === 0, 'empty / errored uni query → none, briefing still built');
+ok(!/ANSWER STYLE/.test(sysText(BP([{}]))), 'no style chosen → default briefing prompt');
+o = BP([{}], { style: 'butler', body: '  Be a discreet butler.  ' + 'x'.repeat(3000) });
+ok(/ANSWER STYLE chosen by the user \("butler"\)[\s\S]*rules above still win\.\nBe a discreet butler\./.test(sysText(o)) && sysText(o).length < 3500, 'chosen style → appended after the rules, body capped');
+ok(!/ANSWER STYLE/.test(sysText(BP([{}], { error: { message: 'relation does not exist' } }))) && !/ANSWER STYLE/.test(sysText(BP([{}], {}))), 'errored / empty style lookup → default prompt, briefing still built');
 
 console.log(`\n${pass} passed`);
