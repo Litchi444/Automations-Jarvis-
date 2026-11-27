@@ -148,4 +148,15 @@ UNI_ALLOWED = {"n8n-nodes-base.emailReadImap", "n8n-nodes-base.code", "n8n-nodes
 extra = [n["name"] for n in uni["nodes"] if n["type"] not in UNI_ALLOWED]
 report("uni mail workflow: IMAP -> code -> postgres only", not extra, ", ".join(extra))
 
+# 13. Writing skills: generated SQL matches skills/*.md, and the agent only reads them ---
+sys.path.insert(0, str(ROOT / "src"))
+import build_workflows  # noqa: E402  (module import has no side effects)
+expected, n_skills = build_workflows.skills_sql()
+on_disk = build_workflows.SKILLS_SQL.read_text(encoding="utf-8").replace("\r\n", "\n") \
+    if build_workflows.SKILLS_SQL.exists() else ""
+report("02-skills.sql in sync with skills/ (regenerated)", on_disk == expected, f"{n_skills} skill(s)")
+skill_tools = [t for t in tools if "assistant.skills" in A[t]["parameters"].get("query", "")]
+report("skills reachable only via read-only agent tools", len(skill_tools) == 2,
+       ", ".join(skill_tools) or "missing")
+
 sys.exit(1 if failed else 0)

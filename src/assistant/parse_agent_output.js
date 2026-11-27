@@ -96,10 +96,22 @@ for (const p of proposals.slice(0, 10)) {
 
 reply = reply
   .replace(/https?:\/\/\S+/gi, '')
-  .replace(/[*_#`]/g, '')
-  .replace(/\s+/g, ' ')
-  .trim()
-  .slice(0, 1500);
+  .replace(/[*_#`]/g, '');
+// Text replies (e.g. a drafted email) keep their line breaks and may be longer
+// (Telegram caps a message at 4096 chars). Voice replies are one spoken paragraph.
+reply = wantsText
+  ? reply
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/ ?\n ?/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, 3500)
+  : reply
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 1500);
 
 if (!reply) reply = valid.length ? 'I have a suggestion for you.' : "Sorry, I couldn't put an answer together.";
 if (rejected.length) reply += ` (I dropped ${rejected.length} suggestion${rejected.length > 1 ? 's' : ''} that had invalid details.)`;

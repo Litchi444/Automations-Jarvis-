@@ -119,6 +119,12 @@ On first start, Postgres creates the `assistant` schema automatically. **If your
 docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /docker-entrypoint-initdb.d/01-assistant.sql'
 ```
 
+**Writing skills.** When you ask Jarvis to write something (an email, a cover letter...), it looks up a matching guide in `skills/*.md` and follows it. Each file is `skills/<name>.md` with a `description:` line in a `---` front matter, then the guide. After adding or editing one, run `python3 src/build_workflows.py` (regenerates `docker/postgres/init/02-skills.sql`), deploy, and load it (idempotent, also removes deleted skills):
+
+```bash
+docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /docker-entrypoint-initdb.d/02-skills.sql'
+```
+
 Open the editor and create the owner account.
 
 ## 4. Google OAuth client

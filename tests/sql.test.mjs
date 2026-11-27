@@ -77,6 +77,25 @@ try {
   ok(u.length === 1 && u[0].body.includes('TP 3') && u[0].to_addr, 'read one email by id');
   ok((await c.query(sql('recent_uni_emails.sql'))).rows.map(x => x.subject).join() === 'Rendu TP', 'briefing: last 24 h only');
 
+  // Writing skills (generated from skills/*.md)
+  const skillsSql = fs.readFileSync(path.join(P, 'docker/postgres/init/02-skills.sql'), 'utf8');
+  const nSkills = fs.readdirSync(path.join(P, 'skills')).filter(f => f.endsWith('.md')).length;
+  await c.query(skillsSql); await c.query(skillsSql);
+  const countSkills = async () => (await c.query('select count(*)::int n from assistant.skills')).rows[0].n;
+  ok(await countSkills() === nSkills, `skills SQL runs twice (idempotent), ${nSkills} skill(s) loaded`);
+  await c.query("insert into assistant.skills (name, description, body) values ('zz-test', 'Tweet 100% short', 'Body with ''quotes''')");
+  let bad = false; try { await c.query("insert into assistant.skills (name, description, body) values ('Bad Name', 'd', 'b')"); } catch { bad = true; }
+  ok(bad, 'skill name must be a lowercase slug');
+  const list = f => q(sql('list_skills.sql'), [f]).then(r => r.rows);
+  ok((await list('')).length === nSkills + 1 && (await list(''))[0].body === undefined, 'list: all skills, name + description only');
+  ok((await list('TWEET')).map(x => x.name).join() === 'zz-test', 'list: case-insensitive filter');
+  ok((await list('100%')).length === 1 && (await list('_')).length === 0, 'list: % and _ are literal');
+  const readSkill = n => q(sql('read_skill.sql'), [n]).then(r => r.rows);
+  ok((await readSkill('  ZZ-Test ')).map(x => x.body).join() === "Body with 'quotes'", 'read: by name, trimmed + lowercased');
+  ok((await readSkill("zz-test' or '1'='1")).length === 0, 'read: unknown / injected name → no rows');
+  await c.query(skillsSql);
+  ok(await countSkills() === nSkills, 'skills SQL removes skills deleted from skills/');
+
   console.log((await c.query('select id,status from assistant.decision_log')).rows.map(x => `${x.id}:${x.status}`).join(' '));
   await c.end();
 } finally { await db.stop(); }

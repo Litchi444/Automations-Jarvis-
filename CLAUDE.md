@@ -16,6 +16,7 @@ Self-hosted n8n 2.x stack: Telegram voice/text assistant ("Jarvis") with human-a
 
 ## Rules
 - Edit `src/**/*.js` and `src/assistant/sql/*.sql`, then `python3 src/build_workflows.py`. Never hand-edit jsCode/query strings in the JSON.
+- Writing skills live in `skills/*.md`; the build generates `docker/postgres/init/02-skills.sql` (never hand-edit). Agent reads them via two SELECT-only `postgresTool`s.
 - Node names are referenced via `$('Name')`. If you rename a node, update every reference (the tests mock them by name).
 - Workflow IDs are fixed (`mbSpeakVoiceNote`, `mbMorningBrief01`, `mbAssistant00001`, `mbUniMailIngest1`) because workflows call each other by ID.
 - University mail: IMAP trigger must keep `postProcessAction: "nothing"` (never mark/move mail). Agent reads the Postgres copy only via fixed SELECT `postgresTool` queries (audited).
@@ -29,6 +30,7 @@ cd tests && npm install && npm test
 docker compose --profile cloud up -d --build
 docker compose exec n8n n8n import:workflow --separate --input=/workflows
 docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /docker-entrypoint-initdb.d/01-assistant.sql'
+docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /docker-entrypoint-initdb.d/02-skills.sql'
 docker compose logs -f n8n
 ```
 

@@ -39,6 +39,16 @@ CREATE TABLE IF NOT EXISTS assistant.uni_emails (
 CREATE INDEX IF NOT EXISTS uni_emails_received_idx
     ON assistant.uni_emails (received_at DESC);
 
+-- Writing guides ("skills") the agent can look up when asked to write something.
+-- Source of truth: skills/*.md in the repo, loaded by the generated 02-skills.sql.
+-- The agent can only SELECT from it through fixed, parameterized queries.
+CREATE TABLE IF NOT EXISTS assistant.skills (
+    name        text        PRIMARY KEY CHECK (name ~ '^[a-z0-9][a-z0-9-]{0,62}$'),
+    description text        NOT NULL,
+    body        text        NOT NULL,
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
 -- Handy audit view: what did I approve / decline lately?
 CREATE OR REPLACE VIEW assistant.decision_log AS
 SELECT id, kind, status, summary, created_at, decided_at, result
