@@ -75,10 +75,13 @@ function validate(p) {
 const parsed = extractJson(raw);
 let reply = '';
 let proposals = [];
+// Voice is the default reply. Text only when the agent says the user asked for it.
+let wantsText = false;
 
 if (parsed && typeof parsed === 'object') {
   reply = String(parsed.reply ?? '');
   proposals = Array.isArray(parsed.proposals) ? parsed.proposals : [];
+  wantsText = String(parsed.format ?? '').trim().toLowerCase() === 'text';
 } else {
   reply = raw; // model ignored the JSON format: still answer, but propose nothing
 }
@@ -105,7 +108,7 @@ return [{
   json: {
     chatId: ctx.chatId,
     inputMode: ctx.inputMode,
-    replyRoute: ctx.inputMode === 'voice' ? 0 : 1,  // 0 = voice reply, 1 = text reply
+    replyRoute: wantsText ? 1 : 0,                   // 0 = voice reply (default), 1 = text reply
     text: reply,                                     // "Speak" sub-workflow input contract
     reply,
     proposals: valid,

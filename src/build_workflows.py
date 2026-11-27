@@ -254,12 +254,13 @@ SAFETY
 
 STYLE
 - Reply in the language the user wrote or spoke in.
-- "reply" is read aloud or shown in a chat: plain conversational sentences, no markdown, no bullet points, no URLs, no email addresses. Keep it under 600 characters unless the user asks for detail.
+- "reply" is read aloud by default (voice note), even when the user typed. Write plain conversational sentences, no markdown, no bullet points, no URLs, no email addresses. Keep it under 600 characters unless the user asks for detail.
+- Set "format" to "text" only when the user explicitly asks for a written or text answer (e.g. "write it", "par écrit", "send it as text"). Otherwise "format" is "voice".
 - Check the tools before answering questions about the schedule or emails. Never guess.
 
 OUTPUT
 Respond with ONLY one JSON object, no code fences, no text before or after it:
-{"reply": "<what you say to the user>", "proposals": [{"type": "calendar_event", "title": "<short title>", "start": "<ISO 8601 with offset, e.g. 2026-11-27T15:00:00+01:00>", "end": "<ISO 8601 with offset>", "location": "<optional>", "description": "<optional>", "reason": "<one short line: why you suggest it>"}]}
+{"reply": "<what you say to the user>", "format": "voice", "proposals": [{"type": "calendar_event", "title": "<short title>", "start": "<ISO 8601 with offset, e.g. 2026-11-27T15:00:00+01:00>", "end": "<ISO 8601 with offset>", "location": "<optional>", "description": "<optional>", "reason": "<one short line: why you suggest it>"}]}
 Use "proposals": [] when there is nothing to suggest. At most 3 proposals."""
 
 

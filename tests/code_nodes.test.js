@@ -51,6 +51,11 @@ o = parse(JSON.stringify({ reply: 'You have **two** meetings https://x.y tomorro
 ok(o.reply === 'You have two meetings tomorrow.' && o.text === o.reply, 'reply cleaned of markdown + URLs, mirrored to text');
 ok(o.proposals.length === 1 && o.proposals[0].payload.title === 'Coffee with Sara' && /📅 Coffee with Sara\n🕒 .+\n📍 Café\n💡/.test(o.proposals[0].summary), 'valid proposal → payload + card summary');
 ok(o.replyRoute === 0, 'voice in → voice reply route');
+o = parse(JSON.stringify({ reply: 'hi', proposals: [] }), { 'Prepare agent input': [{ chatId: '111', inputMode: 'text' }] });
+ok(o.replyRoute === 0, 'text in, no format → voice reply by default');
+o = parse(JSON.stringify({ reply: 'hi', format: 'TEXT', proposals: [] }));
+ok(o.replyRoute === 1, 'format "text" → text reply route');
+ok(parse('plain non-JSON answer').replyRoute === 0, 'non-JSON → voice reply');
 ok(parse('```json\n' + JSON.stringify({ reply: 'ok', proposals: [] }) + '\n```').reply === 'ok', 'code-fenced JSON tolerated');
 o = parse('Sure! Tomorrow you are free.');
 ok(o.reply === 'Sure! Tomorrow you are free.' && o.proposals.length === 0, 'non-JSON → answered, no proposals');
@@ -66,7 +71,7 @@ ok(o.proposals.length === 0 && o.rejectedProposals.length === 6, `6 bad proposal
 ok(/dropped 6 suggestions/.test(o.reply), 'user told that suggestions were dropped');
 o = parse(JSON.stringify({ reply: 'many', proposals: [ev(), ev(), ev(), ev(), ev()] }));
 ok(o.proposals.length === 3, 'max 3 proposals per turn');
-o = parse(JSON.stringify({ reply: '', proposals: [ev({ title: 'A\u0000B' + 'x'.repeat(300) })] }), { 'Prepare agent input': [{ chatId: '111', inputMode: 'text' }] });
+o = parse(JSON.stringify({ reply: '', format: 'text', proposals: [ev({ title: 'A\u0000B' + 'x'.repeat(300) })] }), { 'Prepare agent input': [{ chatId: '111', inputMode: 'text' }] });
 ok(o.proposals[0].payload.title.length === 120 && !o.proposals[0].payload.title.includes('\u0000') && o.replyRoute === 1 && o.reply, 'title sanitized + capped, text route, empty reply filled');
 
 console.log('proposals_to_items');
