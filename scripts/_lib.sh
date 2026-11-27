@@ -2,6 +2,9 @@
 # Shared helpers for agent-facing scripts.
 # Rules: never print secret values; keep output to a few PASS/FAIL lines.
 set -uo pipefail
+# Git Bash on Windows rewrites container paths (/usr/local/bin/…) into host paths
+# in docker arguments. Turn that off; the variable is ignored everywhere else.
+export MSYS_NO_PATHCONV=1
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 2
