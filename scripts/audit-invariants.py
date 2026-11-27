@@ -21,7 +21,7 @@ def report(name, ok, detail=""):
 
 
 def load(fname):
-    return json.loads((WF_DIR / fname).read_text())
+    return json.loads((WF_DIR / fname).read_text(encoding="utf-8"))
 
 
 def by_name(wf):
@@ -108,7 +108,7 @@ route_src = A.get("Route update", {}).get("parameters", {}).get("jsCode", "")
 report("second chat-id gate in 'Route update'", "TELEGRAM_CHAT_ID" in route_src and "return []" in route_src)
 
 # 9. Generated JSON in sync with src/ -------------------------------------------
-srcs = {p.read_text() for p in (ROOT / "src").rglob("*.js")} | {p.read_text() for p in (ROOT / "src").rglob("*.sql")}
+srcs = {p.read_text(encoding="utf-8") for p in (ROOT / "src").rglob("*.js")} | {p.read_text(encoding="utf-8") for p in (ROOT / "src").rglob("*.sql")}
 stale = [f"{wf['name'][:12]}/{n['name']}" for wf in (asst, speak, brief) for n in wf["nodes"]
          if (n["parameters"].get("jsCode") and n["parameters"]["jsCode"] not in srcs)
          or (n["parameters"].get("operation") == "executeQuery" and n["parameters"]["query"] not in srcs)]

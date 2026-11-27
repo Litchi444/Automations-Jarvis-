@@ -1,18 +1,23 @@
 import EmbeddedPostgres from 'embedded-postgres';
 import pg from 'pg';
 import fs from 'fs';
-const P = new URL('..', import.meta.url).pathname;
-const sql = f => fs.readFileSync(P + 'src/assistant/sql/' + f, 'utf8');
-const db = new EmbeddedPostgres({ databaseDir: fs.mkdtempSync('/tmp/mb-pg-'), user: 'n8n', password: 'pw', port: 54329, persistent: false });
+import os from 'os';
+import path from 'path';
+import { fileURLToPath } from 'url';
+// fileURLToPath + os.tmpdir keep this runnable on Windows as well as Linux/macOS.
+const P = fileURLToPath(new URL('..', import.meta.url));
+const sql = f => fs.readFileSync(path.join(P, 'src/assistant/sql', f), 'utf8');
+const db = new EmbeddedPostgres({ databaseDir: fs.mkdtempSync(path.join(os.tmpdir(), 'mb-pg-')), user: 'n8n', password: 'pw', port: 54329, persistent: false, initdbFlags: ['--encoding=UTF8', '--locale=C'] });
 const ok = (c, m) => { if (!c) { throw new Error('FAIL: ' + m); } console.log('  ✓', m); };
 await db.initialise(); await db.start();
 try {
-  const mk = () => { const c = new pg.Client({ host: 'localhost', port: 54329, user: 'n8n', password: 'pw', database: 'postgres' }); return c; };
+  // Swallow socket errors raised when the server stops after a failure, so the real error is reported.
+  const mk = () => { const c = new pg.Client({ host: 'localhost', port: 54329, user: 'n8n', password: 'pw', database: 'postgres' }); c.on('error', () => {}); return c; };
   const c = mk(); await c.connect();
   // n8n stringifies objects in queryReplacement arrays
   const q = (s, params) => c.query(s, params.map(v => typeof v === 'object' && v !== null ? JSON.stringify(v) : v));
-  await c.query(fs.readFileSync(P + 'docker/postgres/init/01-assistant.sql', 'utf8'));
-  await c.query(fs.readFileSync(P + 'docker/postgres/init/01-assistant.sql', 'utf8'));
+  await c.query(fs.readFileSync(path.join(P, 'docker/postgres/init/01-assistant.sql'), 'utf8'));
+  await c.query(fs.readFileSync(path.join(P, 'docker/postgres/init/01-assistant.sql'), 'utf8'));
   ok(true, 'init SQL runs twice (idempotent)');
   const payload = { title: 'Dentist', start: '2026-11-27T14:00:00.000Z', end: '2026-11-27T15:00:00.000Z', location: '', description: '' };
   const ins = async (chat = '111', ttl = 12) => (await q(sql('insert_proposal.sql'), [chat, 'calendar_event', payload, '📅 Dentist', ttl])).rows[0];

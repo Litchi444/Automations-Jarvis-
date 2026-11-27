@@ -1,29 +1,20 @@
 // Code node: "Clean script" (Run Once for All Items)
-// Extracts Gemini's text, strips anything a TTS voice would read badly,
-// and enforces the character budget on a sentence boundary.
+// Extracts Gemini's text and enforces the character budget on a sentence
+// boundary. Speech cleaning (URLs, markdown, emoji…) happens in the Speak
+// sub-workflow ("Speech-safe text"); it only ever shortens the text.
 
 const cfg = $('Config').first().json;
 const maxChars = Number(cfg.maxChars) || 300;
 const res = $input.first().json;
 
 const parts = res.candidates?.[0]?.content?.parts || [];
-let text = parts.filter(p => !p.thought && typeof p.text === 'string').map(p => p.text).join(' ');
+let text = parts.filter(p => !p.thought && typeof p.text === 'string').map(p => p.text).join(' ')
+  .replace(/\s+/g, ' ')
+  .trim();
 
-if (!text.trim()) {
+if (!text) {
   throw new Error('Gemini returned no text. Raw: ' + JSON.stringify(res).slice(0, 500));
 }
-
-text = text
-  .replace(/https?:\/\/\S+/gi, '')              // URLs
-  .replace(/\S+@\S+\.\S+/g, '')                  // email addresses
-  .replace(/^\s*[-•*]\s+/gm, '')                 // bullet markers
-  .replace(/[*_#`>~|\[\]{}<>]/g, '')             // markdown / display chars
-  .replace(/\p{Extended_Pictographic}/gu, '')    // emojis
-  .replace(/\s[-–—]\s/g, ', ')                   // inline dashes -> pause
-  .replace(/\s+/g, ' ')
-  .replace(/\s+([.,!?;:])/g, '$1')               // no space before punctuation
-  .replace(/([.,!?;:]),/g, '$1')                 // no doubled punctuation
-  .trim();
 
 if (text.length > maxChars) {
   const cut = text.slice(0, maxChars);

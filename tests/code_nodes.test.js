@@ -4,7 +4,7 @@ let pass = 0;
 const ok = (c, m) => { if (!c) { console.log('  ✗ FAIL:', m); process.exitCode = 1; } else { pass++; console.log('  ✓', m); } };
 function run(file, nodes = {}, input = {}, env = { TELEGRAM_CHAT_ID: '111', GENERIC_TIMEZONE: 'Europe/Paris' }) {
   const $ = n => { if (!nodes[n]) throw new Error('missing node ref ' + n); return { first: () => ({ json: nodes[n][0] }), all: () => nodes[n].map(j => ({ json: j })) }; };
-  const $input = { first: () => ({ json: input }) };
+  const $input = { first: () => ({ json: input }), all: () => [{ json: input }] };
   return new Function('$', '$input', '$env', 'Buffer', fs.readFileSync(S + file, 'utf8'))($, $input, env, Buffer);
 }
 const R = 'assistant/route_update.js';
@@ -78,8 +78,32 @@ console.log('callback_outcome');
 const C = (row) => run('assistant/callback_outcome.js', { 'Route update': [{ proposalId: '7' }] }, row)[0].json;
 ok(C({ id: 7, ok: true, status: 'approved', summary: 'S', payload: { title: 'x' } }).route === 0, 'approved → create route');
 ok(/❌ Declined/.test(C({ id: 7, ok: true, status: 'declined', summary: 'S' }).editText), 'declined → card updated');
+ok(/Already declined/.test(C({ id: 7, ok: false, status: 'declined', summary: 'S' }).editText), 'tap on already-declined card → "already", not a fresh decline');
 ok(/⌛ Expired/.test(C({ id: 7, ok: false, status: 'expired', summary: 'S' }).editText), 'expired → card updated');
 ok(/Already being processed/.test(C({ id: 7, ok: false, status: 'pending', summary: 'S' }).editText), 'race loser → being processed');
 ok(/Already executed/.test(C({ id: 7, ok: false, status: 'executed', summary: 'S' }).editText) && C({ id: 7, ok: false, status: 'executed' }).route === 1, 'double tap → no second create');
 ok(/no longer exists/.test(C({}).editText), 'unknown proposal → handled');
+console.log('speak_sanitize');
+const SP = (json) => run('speak_sanitize.js', {}, json)[0].json;
+o = SP({ text: 'Hi 👋 **Sara**: see https://x.y/z or mail bob@ex.com now.', chatId: '111' });
+ok(o.text === 'Hi Sara: see or mail now.' && o.chatId === '111', 'URL, email, emoji, markdown stripped; other fields kept');
+ok(SP({ text: '- one\n• two\n* three' }).text === 'one two three', 'bullet markers stripped');
+ok(SP({ text: 'Lunch at noon - then rest .' }).text === 'Lunch at noon, then rest.', 'inline dash → pause, no space before punctuation');
+ok(SP({ text: 'Done ✅ , ok' }).text === 'Done, ok', 'no doubled punctuation after emoji removal');
+ok(SP({ text: '  🎉🎉  ' }).text === '🎉🎉', 'nothing speakable → original trimmed text kept');
+o = SP({ text: 'Read **this**', caption: '📅 **Card** https://x.y' });
+ok(o.text === 'Read this' && o.caption === '📅 **Card** https://x.y', 'explicit caption left untouched');
+
+console.log('clean_script');
+const gem = text => ({ candidates: [{ content: { parts: [{ thought: true, text: 'thinking…' }, { text }] } }] });
+const CL = (text, maxChars = 300) => run('clean_script.js', { Config: [{ maxChars }] }, gem(text))[0].json;
+o = CL('Good  morning.\nNothing today.');
+ok(o.text === 'Good morning. Nothing today.' && o.script === o.text && o.chars === o.text.length, 'thoughts skipped, whitespace collapsed');
+o = CL('First sentence is here. Second sentence goes on and on.', 40);
+ok(o.text === 'First sentence is here.', 'over budget → cut at last sentence end');
+o = CL('one two three four five six seven eight nine ten', 20);
+ok(o.text === 'one two three four.', 'no sentence end → cut at word, add period');
+threw = false; try { run('clean_script.js', { Config: [{}] }, { candidates: [] }); } catch { threw = true; }
+ok(threw, 'no text from Gemini → hard error');
+
 console.log(`\n${pass} passed`);

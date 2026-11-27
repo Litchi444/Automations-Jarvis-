@@ -4,6 +4,7 @@
 
 Never hand-edit jsCode / SQL inside the JSON: edit src/ and regenerate.
 """
+import itertools
 import json
 import pathlib
 import uuid
@@ -18,14 +19,17 @@ BRIEFING_ID = "mbMorningBrief01"
 ASSISTANT_ID = "mbAssistant00001"
 
 FILES_DIR = "/home/node/.n8n-files"
-GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models/"
+# flash-lite: on the free tier gemini-flash-latest often returns 503 (high
+# demand) and has a 5 req/min cap; one agent turn makes several calls.
+TEXT_MODEL = "gemini-flash-lite-latest"
+GEMINI_BASE ="https://generativelanguage.googleapis.com/v1beta/models/"
 TG = "https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}"
 GEMINI_AUTH = {"authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth"}
 PRIMARY_CAL = {"__rl": True, "mode": "list", "value": "primary", "cachedResultName": "Primary calendar"}
 
 
 def read(rel: str) -> str:
-    return (SRC / rel).read_text()
+    return (SRC / rel).read_text(encoding="utf-8")
 
 
 class WF:
@@ -48,7 +52,7 @@ class WF:
         outs[out].append({"node": dst, "type": kind, "index": 0})
 
     def chain(self, *names):
-        for a, b in zip(names, names[1:]):
+        for a, b in itertools.pairwise(names):
             self.link(a, b)
 
     def write(self, filename):
@@ -67,7 +71,8 @@ class WF:
                          "saveDataErrorExecution": "all", "callerPolicy": "workflowsFromSameOwner"},
             "pinData": {}, "meta": {"templateCredsSetupCompleted": False}, "tags": [],
         }
-        (OUT / filename).write_text(json.dumps(wf, indent=2, ensure_ascii=False) + "\n")
+        (OUT / filename).write_text(json.dumps(wf, indent=2, ensure_ascii=False) + "\n",
+                                     encoding="utf-8", newline="\n")
         print(f"wrote workflows/{filename}: {len(self.nodes)} nodes")
 
 
@@ -104,13 +109,15 @@ def exec_speak():
 
 # ═══════════════════════════════════════════════════════════════════
 # 1) SPEAK: shared sub-workflow. Input item: { text, caption?, chatId? }
+#    Owns speech cleaning: callers pass plain text, "Speech-safe text" makes it TTS-safe.
 # ═══════════════════════════════════════════════════════════════════
 def build_speak():
     w = WF(SPEAK_ID, "Speak: text → Gemini voice → Telegram (sub-workflow)")
     cfg = "$('Config').first().json"
 
-    w.node("When called by another workflow", "n8n-nodes-base.executeWorkflowTrigger", 1.1, [0, 300],
+    w.node("When called by another workflow", "n8n-nodes-base.executeWorkflowTrigger", 1.1, [-220, 300],
            {"inputSource": "passthrough"})
+    w.node("Speech-safe text", "n8n-nodes-base.code", 2, [0, 300], code("speak_sanitize.js"))
     w.node("Config", "n8n-nodes-base.set", 3.4, [220, 300], set_node(
         assign("ttsModel", "gemini-3.1-flash-tts-preview"),
         assign("voiceName", "Kore"),
@@ -174,7 +181,7 @@ def build_speak():
         f"  text: {cfg}.text\n"
         "}) }}"), executeOnce=True)
 
-    w.chain("When called by another workflow", "Config", "Gemini: text-to-speech")
+    w.chain("When called by another workflow", "Speech-safe text", "Config", "Gemini: text-to-speech")
     w.link("Gemini: text-to-speech", "PCM to WAV", 0)
     w.link("Gemini: text-to-speech", "Telegram: text fallback", 1)
     w.chain("PCM to WAV", "Write WAV", "ffmpeg: WAV to OGG Opus")
@@ -193,7 +200,7 @@ def build_briefing():
         "rule": {"interval": [{"field": "days", "daysInterval": 1,
                                "triggerAtHour": 7, "triggerAtMinute": 30}]}})
     w.node("Config", "n8n-nodes-base.set", 3.4, [220, 300], set_node(
-        assign("textModel", "gemini-flash-lite-latest"),
+        assign("textModel", TEXT_MODEL),
         assign("language", "English"),
         assign("maxChars", 300, "number"),
         assign("timezone", "={{ $env.GENERIC_TIMEZONE || 'Europe/Paris' }}"),
@@ -261,7 +268,7 @@ def build_assistant():
         "additionalFields": {"chatIds": "={{ $env.TELEGRAM_CHAT_ID }}"},
     }, webhookId=str(uuid.uuid5(uuid.NAMESPACE_URL, "assistant/telegram-webhook")))
     w.node("Config", "n8n-nodes-base.set", 3.4, [200, 400], set_node(
-        assign("transcribeModel", "gemini-flash-lite-latest"),
+        assign("transcribeModel", TEXT_MODEL),
         assign("proposalTtlHours", 12, "number"),
     ))
     w.node("Route update", "n8n-nodes-base.code", 2, [400, 400], code("assistant/route_update.js"))
@@ -308,9 +315,7 @@ def build_assistant():
         "options": {"systemMessage": SYSTEM_MESSAGE, "maxIterations": 8},
     })
     w.node("Gemini chat model", "@n8n/n8n-nodes-langchain.lmChatGoogleGemini", 1.2, [1760, 640], {
-        # flash-lite: on the free tier gemini-flash-latest often returns 503 (high
-        # demand) and has a 5 req/min cap; one agent turn makes several calls.
-        "modelName": "models/gemini-flash-lite-latest", "options": {}})
+        "modelName": f"models/{TEXT_MODEL}", "options": {}})
     w.node("Chat memory", "@n8n/n8n-nodes-langchain.memoryPostgresChat", 1.4, [1900, 640], {
         "sessionIdType": "customKey",
         "sessionKey": "={{ $('Prepare agent input').first().json.sessionKey }}",
@@ -438,22 +443,23 @@ def build_assistant():
 
 def lint_expressions():
     """Catch literal '{{' / '}}' that n8n would misread as expressions."""
+    def walk(v, path, where):
+        if isinstance(v, dict):
+            for k, x in v.items():
+                walk(x, f"{path}.{k}", where)
+        elif isinstance(v, list):
+            for i, x in enumerate(v):
+                walk(x, f"{path}[{i}]", where)
+        elif isinstance(v, str) and path.split(".")[-1] not in ("jsCode", "query"):
+            if v.count("{{") != v.count("}}"):
+                raise SystemExit(f"{where}{path}: unbalanced {{{{ }}}}")
+            if "{{" in v and not v.startswith("="):
+                raise SystemExit(f"{where}{path}: expression without '=' prefix")
+
     for f in OUT.glob("*.json"):
-        wf = json.loads(f.read_text())
+        wf = json.loads(f.read_text(encoding="utf-8"))
         for n in wf["nodes"]:
-            def walk(v, path):
-                if isinstance(v, dict):
-                    for k, x in v.items():
-                        walk(x, f"{path}.{k}")
-                elif isinstance(v, list):
-                    for i, x in enumerate(v):
-                        walk(x, f"{path}[{i}]")
-                elif isinstance(v, str) and path.split(".")[-1] not in ("jsCode", "query"):
-                    if v.count("{{") != v.count("}}"):
-                        raise SystemExit(f"{f.name}:{n['name']}{path}: unbalanced {{{{ }}}}")
-                    if "{{" in v and not v.startswith("="):
-                        raise SystemExit(f"{f.name}:{n['name']}{path}: expression without '=' prefix")
-            walk(n["parameters"], "")
+            walk(n["parameters"], "", f"{f.name}:{n['name']}")
 
 
 if __name__ == "__main__":

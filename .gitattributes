@@ -1,0 +1,2 @@
+# Stack runs on Linux (Docker, VPS): keep LF everywhere, even in Windows checkouts.
+* text=auto eol=lf
