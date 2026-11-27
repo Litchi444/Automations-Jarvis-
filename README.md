@@ -35,13 +35,14 @@ The **manager** reads `plan/STATUS.md` and runs the deployment one phase at a ti
 
 **Later features:** ask the manager (e.g. *"let Jarvis propose Google Tasks too"*). It writes a change request from `plan/CR-template.md` and splits it into ≤3-file builder tasks, each verified by qa. Requests that would let the AI act on its own get redesigned as approval cards.
 
-## The three workflows
+## The four workflows
 
 | Workflow | Trigger | Role |
 |---|---|---|
-| **Speak** (`workflow_speak.json`) | called by the other two | text → Gemini TTS → ffmpeg OGG/Opus → Telegram voice note (text fallback if it fails) |
-| **Morning Briefing** | daily 07:30 | today's events + important unread mail → Gemini script → *Speak* |
+| **Speak** (`workflow_speak.json`) | called by the briefing and Jarvis | text → Gemini TTS → ffmpeg OGG/Opus → Telegram voice note (text fallback if it fails) |
+| **Morning Briefing** | daily 07:30 | today's events + important unread Gmail + last 24 h of university mail → Gemini script → *Speak* |
 | **Assistant (Jarvis)** | Telegram messages + button taps | conversation, read-only tools, approval cards |
+| **University mail → database** (`workflow_university_mail.json`) | new mail in the university IMAP inbox | copies each email into `assistant.uni_emails` (180-day retention). Never marks, moves or deletes mail. Jarvis searches the copy with fixed read-only SQL |
 
 ### How the assistant works
 
@@ -115,7 +116,7 @@ docker compose exec n8n /usr/local/bin/ffmpeg -hide_banner -encoders | grep opus
 On first start, Postgres creates the `assistant` schema automatically. **If your Postgres volume already existed** (from the briefing-only version), apply it once:
 
 ```bash
-docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < docker/postgres/init/01-assistant.sql
+docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /docker-entrypoint-initdb.d/01-assistant.sql'
 ```
 
 Open the editor and create the owner account.
@@ -128,7 +129,7 @@ Open the editor and create the owner account.
 
 Approving suggestions needs **calendar write** scope. n8n's Google Calendar credential requests it by default, but your Google consent screen must allow it.
 
-## 5. Credentials in n8n (6 total)
+## 5. Credentials in n8n (7 total)
 
 | Credential type | Used by | Fields |
 |---|---|---|
@@ -136,8 +137,9 @@ Approving suggestions needs **calendar write** scope. n8n's Google Calendar cred
 | **Gmail OAuth2 API** | briefing, Jarvis search/read tools | Client ID + Secret → *Sign in* |
 | **Header Auth** ("Gemini API key") | Gemini HTTP nodes (TTS, script, transcription) | Name `x-goog-api-key`, Value = your key |
 | **Google Gemini (PaLM) API** | Jarvis chat model | Host `https://generativelanguage.googleapis.com`, API key |
-| **Postgres** | chat memory + proposals | Host `postgres`, DB/user/password from `.env`, port 5432, SSL off |
+| **Postgres** | chat memory, proposals, university mail copy (+ Jarvis *Uni mail* tools, briefing) | Host `postgres`, DB/user/password from `.env`, port 5432, SSL off |
 | **Telegram API** | Telegram Trigger only | Bot token |
+| **IMAP** ("University mail") | University mail → database | User = university login, Password = university password, Host `imap.univ-lemans.fr`, Port `993`, SSL/TLS on. If the connection fails on the certificate (the server presents `jaguar-r1.univ-lemans.fr`), enable *Allow Self-Signed Certificates* |
 
 (The Telegram token is also read from `.env` by the HTTP nodes. The trigger needs its own credential to register the webhook.)
 
@@ -158,6 +160,8 @@ The workflows keep fixed IDs, so the briefing and Jarvis find *Speak* automatica
    - voice: *"Did Sara email me this week?"*
    - *"Put a dentist appointment on Thursday at 3pm for an hour"* → a card appears → tap **Approve** → check your calendar.
    - Tap **Approve** again → *"Already executed"*.
+
+4. **University mail → database**: apply the schema first (it adds `assistant.uni_emails`; command under *Development*/CLAUDE.md), then publish. It starts with mail received since the activation day. Send yourself a test email at the university address, then ask Jarvis *"Any new emails from the fac?"*.
 
 Telegram allows one webhook per bot. If you use *Listen for test event* in the editor, publish again afterwards to restore the production webhook.
 

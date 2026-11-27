@@ -12,10 +12,12 @@ Only you can sign in to Google and paste API keys. The manager shows you this li
    - Google Gemini (PaLM) API: host `https://generativelanguage.googleapis.com` + key
    - Postgres: host `postgres`, port 5432, DB/user/password from `.env`, SSL off
    - Telegram API: bot token
+   - IMAP "University mail": university login + password (the USER types them), host `imap.univ-lemans.fr`, port 993, SSL/TLS on
 3. Open each workflow and attach credentials to every node showing a warning:
    - Speak: Gemini TTS
-   - Briefing: Calendar, Gmail, Gemini
-   - Assistant: Telegram Trigger, Gemini transcribe, chat model, chat memory, 3 tools, 3 Postgres, Create calendar event
+   - Briefing: Calendar, Gmail, Get uni emails (Postgres), Gemini
+   - Assistant: Telegram Trigger, Gemini transcribe, chat model, chat memory, 5 tools (2 are Postgres), 3 Postgres, Create calendar event
+   - University mail: IMAP trigger, Save uni email (Postgres)
 4. Optional but recommended: n8n Settings → n8n API → create an API key and add `N8N_API_KEY=...` to `.env`. It lets the agents read execution results for you.
 
 ## Answers the manager accepts

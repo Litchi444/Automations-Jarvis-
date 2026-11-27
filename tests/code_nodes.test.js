@@ -106,4 +106,31 @@ ok(o.text === 'one two three four.', 'no sentence end → cut at word, add perio
 threw = false; try { run('clean_script.js', { Config: [{}] }, { candidates: [] }); } catch { threw = true; }
 ok(threw, 'no text from Gemini → hard error');
 
+console.log('normalize_email (university IMAP)');
+const NE = (...items) => {
+  const $input = items;
+  return new Function('$input', fs.readFileSync(S + 'unimail/normalize_email.js', 'utf8'))({ all: () => $input.map(json => ({ json })) });
+};
+o = NE({ textPlain: 'Bonjour,\r\n\r\n\r\n\r\nRendu du  TP lundi.\u0000', textHtml: '<p>ignored</p>', from: '"Scolarité" <scol@univ-lemans.fr>', to: 'me@etu.univ-lemans.fr',
+  subject: 'Rendu TP', date: 'Thu, 26 Nov 2026 09:15:00 +0100', metadata: { 'message-id': '<abc@univ-lemans.fr>' }, attributes: { uid: 7 } });
+ok(o.length === 1 && o[0].json.body === 'Bonjour,\n\nRendu du TP lundi.' && o[0].json.messageId === '<abc@univ-lemans.fr>', 'plain text preferred, whitespace + NUL cleaned, Message-ID kept');
+ok(o[0].json.receivedAt === '2026-11-26T08:15:00.000Z' && o[0].json.from.includes('scol@univ-lemans.fr'), 'date → ISO UTC, sender kept');
+o = NE({ textHtml: '<style>p{}</style><p>Cours annul&eacute;?</p><p>Salle &#233;tage 2 &amp; B&lt;1&gt;</p><script>x()</script>', subject: 'Info', date: 'garbage', metadata: { 'Message-ID': '<h@x>' } });
+ok(o[0].json.body === 'Cours annul&eacute;?\nSalle étage 2 & B<1>' && o[0].json.messageId === '<h@x>', 'HTML-only → text, entities decoded, scripts/styles dropped, header case-insensitive');
+ok(!Number.isNaN(Date.parse(o[0].json.receivedAt)), 'bad date → now()');
+o = NE({ textPlain: 'x', subject: 'S', from: 'a@b', date: 'Thu, 26 Nov 2026 09:15:00 +0100' });
+ok(o[0].json.messageId.startsWith('no-id:2026-11-26T08:15:00.000Z:a@b:S'), 'missing Message-ID → stable fallback id');
+ok(NE({}, null).length === 0, 'empty items skipped');
+ok(NE({ textPlain: 'y'.repeat(30000), subject: 's' })[0].json.body.length === 20000, 'body capped at 20k chars');
+
+console.log('build_prompt (briefing)');
+const BP = uni => run('build_prompt.js', {
+  Config: [{ maxChars: 300, language: 'English', timezone: 'Europe/Paris' }],
+  'Get today events': [{}], 'Get priority emails': [{}], 'Get uni emails': uni,
+})[0].json;
+o = BP([{ id: 3, from_addr: '"Scolarité" <scol@univ-lemans.fr>', subject: 'Rendu TP', preview: 'Rendu  lundi' }]);
+const ut = o.geminiRequest.contents[0].parts[0].text;
+ok(o.uniEmailCount === 1 && /UNIVERSITY EMAILS, LAST 24 HOURS \(1\):\n- From: Scolarité \| Subject: Rendu TP \| Preview: Rendu lundi/.test(ut), 'uni emails listed in prompt');
+ok(BP([{}]).uniEmailCount === 0 && BP([{ error: { message: 'relation does not exist' } }]).uniEmailCount === 0, 'empty / errored uni query → none, briefing still built');
+
 console.log(`\n${pass} passed`);

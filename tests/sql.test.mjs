@@ -58,6 +58,25 @@ try {
   const wins = [...r1, ...r2].filter(x => x.ok).length;
   ok(wins === 1, `concurrent double-tap → exactly one winner (got ${wins}); loser sees: ${[...r1, ...r2].filter(x => !x.ok).map(x => x.status).join(',') || 'nothing'}`);
   await c2.end(); await c3.end();
+  // University mailbox copy
+  const uIns = (mid, subject, body, when = new Date().toISOString(), from = '"Scolarité" <scol@univ-lemans.fr>') =>
+    q(sql('insert_uni_email.sql'), [mid, from, 'me@etu.univ-lemans.fr', subject, body, when]).then(r => r.rows);
+  const old = new Date(Date.now() - 200 * 86400e3).toISOString();
+  await uIns('<old@x>', 'Ancien', 'vieux', old);
+  let u = await uIns('<tp@x>', 'Rendu TP', 'Le TP 3 est à rendre lundi, 100% obligatoire.');
+  ok(u.length === 1 && u[0].id, 'uni email inserted');
+  ok((await uIns('<tp@x>', 'Rendu TP', 'dup')).length === 0, 'same Message-ID → ignored (idempotent)');
+  ok((await c.query("select count(*)::int n from assistant.uni_emails where message_id='<old@x>'")).rows[0].n === 0, 'copies older than 180 days pruned');
+  await uIns('<week@x>', 'Réunion', 'Amphi B', new Date(Date.now() - 10 * 86400e3).toISOString(), 'prof@univ-lemans.fr');
+  const search = (t, d) => q(sql('search_uni_emails.sql'), [t, d]).then(r => r.rows);
+  ok((await search('rendu', 7)).map(x => x.subject).join() === 'Rendu TP', 'search: case-insensitive match on subject, days window');
+  ok((await search('', 30)).length === 2 && (await search('', 7)).length === 1, 'empty text → all within window');
+  ok((await search('100%', 7)).length === 1 && (await search('_', 7)).length === 0, '% and _ are literal, not wildcards');
+  ok((await search('PROF@', '')).length === 1 && (await search('x', 99999)).length === 0, 'sender match; empty days → 14 default; days capped');
+  u = (await q(sql('read_uni_email.sql'), [String(u[0].id)])).rows;
+  ok(u.length === 1 && u[0].body.includes('TP 3') && u[0].to_addr, 'read one email by id');
+  ok((await c.query(sql('recent_uni_emails.sql'))).rows.map(x => x.subject).join() === 'Rendu TP', 'briefing: last 24 h only');
+
   console.log((await c.query('select id,status from assistant.decision_log')).rows.map(x => `${x.id}:${x.status}`).join(' '));
   await c.end();
 } finally { await db.stop(); }

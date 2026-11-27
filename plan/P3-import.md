@@ -13,7 +13,7 @@ Load the three workflows into n8n with their fixed IDs.
 3. "Owner not set up" errors → NEEDS_HUMAN: open the editor URL and create the owner account first, then rerun this phase.
 
 ## Acceptance criteria
-- [ ] `list:workflow` shows `mbSpeakVoiceNote`, `mbMorningBrief01`, `mbAssistant00001`
+- [ ] `list:workflow` shows `mbSpeakVoiceNote`, `mbMorningBrief01`, `mbAssistant00001`, `mbUniMailIngest1`
 - [ ] No import errors
 
 ## Note for the handoff

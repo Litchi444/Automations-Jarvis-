@@ -1,7 +1,8 @@
 -- Assistant schema: AI suggestions awaiting human approval.
 -- Runs automatically on a FRESH postgres volume (docker-entrypoint-initdb.d).
--- Existing volume? Apply manually (idempotent):
---   docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < docker/postgres/init/01-assistant.sql
+-- Existing volume? Apply manually (idempotent). Uses the copy mounted in the container,
+-- so it works from bash and PowerShell (PowerShell has no '<' input redirection):
+--   docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /docker-entrypoint-initdb.d/01-assistant.sql'
 
 CREATE SCHEMA IF NOT EXISTS assistant;
 
@@ -21,6 +22,22 @@ CREATE TABLE IF NOT EXISTS assistant.proposals (
 
 CREATE INDEX IF NOT EXISTS proposals_chat_status_idx
     ON assistant.proposals (chat_id, status, expires_at);
+
+-- Read-only copy of the university mailbox (filled by the "University mail → database" workflow).
+-- The agent can only SELECT from it through fixed, parameterized queries.
+CREATE TABLE IF NOT EXISTS assistant.uni_emails (
+    id          bigserial PRIMARY KEY,
+    message_id  text        NOT NULL UNIQUE,   -- Message-ID header: makes re-delivery idempotent
+    from_addr   text        NOT NULL DEFAULT '',
+    to_addr     text        NOT NULL DEFAULT '',
+    subject     text        NOT NULL DEFAULT '',
+    body        text        NOT NULL DEFAULT '', -- plain text, capped at 20k chars
+    received_at timestamptz NOT NULL,
+    fetched_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS uni_emails_received_idx
+    ON assistant.uni_emails (received_at DESC);
 
 -- Handy audit view: what did I approve / decline lately?
 CREATE OR REPLACE VIEW assistant.decision_log AS

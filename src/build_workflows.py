@@ -1,4 +1,4 @@
-"""Generates the three n8n workflow exports in workflows/ from the sources in src/.
+"""Generates the four n8n workflow exports in workflows/ from the sources in src/.
 
     python3 src/build_workflows.py
 
@@ -17,6 +17,7 @@ OUT = ROOT / "workflows"
 SPEAK_ID = "mbSpeakVoiceNote"
 BRIEFING_ID = "mbMorningBrief01"
 ASSISTANT_ID = "mbAssistant00001"
+UNIMAIL_ID = "mbUniMailIngest1"
 
 FILES_DIR = "/home/node/.n8n-files"
 # flash-lite: on the free tier gemini-flash-latest often returns 503 (high
@@ -93,9 +94,9 @@ def http_json(method, url, body, **opts):
             "jsonBody": body, "options": opts or {}}
 
 
-def pg_query(sql_rel, replacement):
+def pg_query(sql_rel, replacement=None):
     return {"operation": "executeQuery", "query": read(sql_rel),
-            "options": {"queryReplacement": replacement}}
+            "options": {"queryReplacement": replacement} if replacement else {}}
 
 
 def exec_speak():
@@ -217,6 +218,10 @@ def build_briefing():
                     "readStatus": "unread"},
         "options": {},
     }, alwaysOutputData=True, executeOnce=True)
+    # Filled by the "University mail → database" workflow. Never blocks the briefing.
+    w.node("Get uni emails", "n8n-nodes-base.postgres", 2.6, [770, 300],
+           pg_query("assistant/sql/recent_uni_emails.sql"),
+           alwaysOutputData=True, executeOnce=True, onError="continueRegularOutput")
     w.node("Build Gemini prompt", "n8n-nodes-base.code", 2, [880, 300], code("build_prompt.js"))
     w.node("Gemini: write script", "n8n-nodes-base.httpRequest", 4.2, [1100, 300], {
         **http_json("POST",
@@ -227,7 +232,7 @@ def build_briefing():
     w.node("Clean script", "n8n-nodes-base.code", 2, [1320, 300], code("clean_script.js"))
     w.node("Speak", "n8n-nodes-base.executeWorkflow", 1.2, [1540, 300], exec_speak())
     w.chain("Every day 07:30", "Config", "Get today events", "Get priority emails",
-            "Build Gemini prompt", "Gemini: write script", "Clean script", "Speak")
+            "Get uni emails", "Build Gemini prompt", "Gemini: write script", "Clean script", "Speak")
     w.write("workflow_morning_briefing.json")
 
 
@@ -238,7 +243,8 @@ SYSTEM_MESSAGE = """=You are Jarvis, the user's personal assistant, talking with
 Current time: {{ $now.setZone($env.GENERIC_TIMEZONE || 'Europe/Paris').toFormat("cccc d LLLL yyyy, HH:mm ZZ") }} (timezone {{ $env.GENERIC_TIMEZONE || 'Europe/Paris' }}).
 
 CAPABILITIES
-- Your tools are READ-ONLY: list calendar events, search Gmail, read one email.
+- Your tools are READ-ONLY: list calendar events, search Gmail, read one Gmail email, search the university mailbox (univ-lemans.fr, "la fac"), read one university email.
+- Gmail and the university mailbox are separate. When the user asks about their emails without naming one, check both.
 - You cannot create, edit, send, delete or reply to anything. Never claim you did, and never promise you will.
 - When adding something to the calendar would genuinely help (the user asks for it, or an email clearly implies a meeting), describe it in "proposals". The user approves or declines each one with a button. Suggest, never pressure.
 
@@ -344,6 +350,19 @@ def build_assistant():
         "resource": "message", "operation": "get",
         "messageId": "={{ $fromAI('messageId', 'The Gmail message id', 'string') }}",
         "simple": False, "options": {}})
+    # Fixed SELECTs; the model only supplies bind values (audited: SELECT-only, parameterized).
+    w.node("Uni mail: search", "n8n-nodes-base.postgresTool", 2.6, [2460, 640], {
+        "descriptionType": "manual",
+        "toolDescription": ("Read-only. Searches the user's university mailbox (univ-lemans.fr). "
+                            "Returns up to 10 emails (id, received_at, from_addr, subject, preview), newest first."),
+        **pg_query("assistant/sql/search_uni_emails.sql",
+                   "={{ [ $fromAI('text', 'Words to find in sender, subject or body. Empty string for all recent emails', 'string'), "
+                   "$fromAI('days', 'How many days back to search, 1 to 365', 'number') ] }}")})
+    w.node("Uni mail: read email", "n8n-nodes-base.postgresTool", 2.6, [2600, 640], {
+        "descriptionType": "manual",
+        "toolDescription": "Read-only. Returns the full content of one university email by its id (from Uni mail: search).",
+        **pg_query("assistant/sql/read_uni_email.sql",
+                   "={{ [ $fromAI('id', 'The university email id', 'number') ] }}")})
     w.node("Parse + validate", "n8n-nodes-base.code", 2, [2200, 400],
            code("assistant/parse_agent_output.js"))
 
@@ -422,7 +441,8 @@ def build_assistant():
             "Prepare agent input", "Jarvis", "Parse + validate")
     w.link("Gemini chat model", "Jarvis", kind="ai_languageModel")
     w.link("Chat memory", "Jarvis", kind="ai_memory")
-    for tool in ("Calendar: list events", "Gmail: search", "Gmail: read email"):
+    for tool in ("Calendar: list events", "Gmail: search", "Gmail: read email",
+                 "Uni mail: search", "Uni mail: read email"):
         w.link(tool, "Jarvis", kind="ai_tool")
     w.link("Parse + validate", "Voice or text?")
     w.link("Parse + validate", "One item per proposal")
@@ -439,6 +459,29 @@ def build_assistant():
         w.link(n, "Answer button")
         w.link(n, "Update card")
     w.write("workflow_assistant.json")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 4) UNIVERSITY MAIL → DATABASE (IMAP, read-only on the mailbox)
+#    postProcessAction "nothing": the mailbox is never modified (no "mark as read").
+#    "Fetch only new emails" tracks the last UID, so ["ALL"] also catches mails already
+#    opened in webmail; Message-ID makes re-delivery a no-op.
+# ═══════════════════════════════════════════════════════════════════
+def build_unimail():
+    w = WF(UNIMAIL_ID, "University mail → database (IMAP, read-only)")
+    w.node("University inbox (IMAP)", "n8n-nodes-base.emailReadImap", 2.2, [0, 300], {
+        "mailbox": "INBOX",
+        "postProcessAction": "nothing",
+        "downloadAttachments": False,
+        "format": "simple",
+        "options": {"customEmailConfig": '["ALL"]', "trackLastMessageId": True},
+    })
+    w.node("Normalize email", "n8n-nodes-base.code", 2, [220, 300], code("unimail/normalize_email.js"))
+    w.node("Save uni email", "n8n-nodes-base.postgres", 2.6, [440, 300], pg_query(
+        "assistant/sql/insert_uni_email.sql",
+        "={{ [ $json.messageId, $json.from, $json.to, $json.subject, $json.body, $json.receivedAt ] }}"))
+    w.chain("University inbox (IMAP)", "Normalize email", "Save uni email")
+    w.write("workflow_university_mail.json")
 
 
 def lint_expressions():
@@ -467,5 +510,6 @@ if __name__ == "__main__":
     build_speak()
     build_briefing()
     build_assistant()
+    build_unimail()
     lint_expressions()
     print("expression lint OK")

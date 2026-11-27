@@ -1,0 +1,92 @@
+{
+  "id": "mbUniMailIngest1",
+  "name": "University mail → database (IMAP, read-only)",
+  "nodes": [
+    {
+      "parameters": {
+        "mailbox": "INBOX",
+        "postProcessAction": "nothing",
+        "downloadAttachments": false,
+        "format": "simple",
+        "options": {
+          "customEmailConfig": "[\"ALL\"]",
+          "trackLastMessageId": true
+        }
+      },
+      "id": "b0c53e28-70d5-50fd-b13e-e864a93d6d3c",
+      "name": "University inbox (IMAP)",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node: \"Normalize email\" (Run Once for All Items)\n// Turns IMAP trigger items (format \"simple\": textPlain, textHtml, from, to, subject, date,\n// metadata['message-id']) into rows for assistant.uni_emails.\n// Mail content is untrusted: it is only cleaned and stored here, never interpreted.\n\nconst MAX_BODY = 20000;\n\nconst decodeEntities = s => s\n  .replace(/&nbsp;/gi, ' ')\n  .replace(/&#(\\d+);/g, (_, n) => String.fromCodePoint(Number(n)))\n  .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))\n  .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')\n  .replace(/&quot;/gi, '\"').replace(/&#39;|&apos;/gi, \"'\")\n  .replace(/&amp;/gi, '&');\n\nconst htmlToText = html => decodeEntities(String(html || '')\n  .replace(/<(script|style|head)[^>]*>[\\s\\S]*?<\\/\\1>/gi, ' ')\n  .replace(/<br\\s*\\/?>|<\\/(p|div|li|tr|h[1-6])>/gi, '\\n')\n  .replace(/<[^>]+>/g, ' '));\n\n// Postgres text rejects NUL; collapse layout whitespace but keep paragraph breaks.\nconst clean = (s, n) => String(s ?? '')\n  .replace(/\\u0000/g, '')\n  .replace(/\\r\\n?/g, '\\n')\n  .replace(/[ \\t\\f\\v]+/g, ' ')\n  .replace(/ *\\n */g, '\\n')\n  .replace(/\\n{3,}/g, '\\n\\n')\n  .trim()\n  .slice(0, n);\n\nconst header = v => {\n  if (Array.isArray(v)) return v.map(header).join(', ');\n  if (v && typeof v === 'object') return String(v.text ?? v.value ?? '');\n  return String(v ?? '');\n};\n\nconst findHeader = (meta, name) => {\n  const key = Object.keys(meta || {}).find(k => k.toLowerCase() === name);\n  return key ? header(meta[key]) : '';\n};\n\nconst rows = [];\nfor (const { json: m } of $input.all()) {\n  if (!m || typeof m !== 'object') continue;\n  const plain = String(m.textPlain || '').trim();\n  const body = clean(plain || htmlToText(m.textHtml), MAX_BODY);\n  const parsed = new Date(header(m.date));\n  const receivedAt = Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();\n  const from = clean(header(m.from), 300);\n  const subject = clean(header(m.subject), 500);\n  const messageId = clean(findHeader(m.metadata, 'message-id'), 500)\n    || clean(`no-id:${receivedAt}:${from}:${subject}`, 500);\n  if (!body && !subject && !from) continue;\n  rows.push({ json: { messageId, from, to: clean(header(m.to), 500), subject, body, receivedAt } });\n}\nreturn rows;\n"
+      },
+      "id": "0a3d4e91-4b7b-5ede-ad6b-309686cdd31f",
+      "name": "Normalize email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Store one university email from the IMAP trigger. Idempotent on Message-ID.\n-- Also prunes copies older than 180 days so the mailbox copy stays bounded.\n-- $1 message_id, $2 from, $3 to, $4 subject, $5 body, $6 received_at (ISO 8601)\nWITH pruned AS (\n    DELETE FROM assistant.uni_emails\n     WHERE received_at < now() - interval '180 days'\n)\nINSERT INTO assistant.uni_emails (message_id, from_addr, to_addr, subject, body, received_at)\nVALUES ($1, $2, $3, $4, $5, $6::timestamptz)\nON CONFLICT (message_id) DO NOTHING\nRETURNING id;\n",
+        "options": {
+          "queryReplacement": "={{ [ $json.messageId, $json.from, $json.to, $json.subject, $json.body, $json.receivedAt ] }}"
+        }
+      },
+      "id": "c1886353-b3e3-559e-8823-5484eab93f73",
+      "name": "Save uni email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        440,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "University inbox (IMAP)": {
+      "main": [
+        [
+          {
+            "node": "Normalize email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize email": {
+      "main": [
+        [
+          {
+            "node": "Save uni email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

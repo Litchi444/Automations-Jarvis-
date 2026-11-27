@@ -13,7 +13,7 @@ Build the n8n+ffmpeg image, start the stack, confirm ffmpeg has Opus and the `as
    - local: `docker compose up -d --build 2>&1 | tail -n 25`
 2. `./scripts/stack-health.sh`. It waits up to ~90 s for health.
 3. If it reports `schema: MISSING` (the Postgres volume existed before), apply the schema:
-   `docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < docker/postgres/init/01-assistant.sql`
+   `docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /docker-entrypoint-initdb.d/01-assistant.sql'`
    Then re-run stack-health.
 4. Image build failing on a registry pull → ISSUES with the failing image name (often `mwader/static-ffmpeg` or `docker.n8n.io/n8nio/n8n` tag). Don't change versions without asking.
 

@@ -39,17 +39,30 @@ def edges(wf, kind="main"):
 asst = load("workflow_assistant.json")
 speak = load("workflow_speak.json")
 brief = load("workflow_morning_briefing.json")
+uni = load("workflow_university_mail.json")
+ALL = (asst, speak, brief, uni)
 A = by_name(asst)
+
+
+def select_only(sql):
+    """One fixed SELECT statement, no write keywords, no expression interpolation."""
+    body = re.sub(r"--[^\n]*", "", sql).strip().rstrip(";").strip()
+    return (body.upper().startswith("SELECT") and ";" not in body and "{{" not in sql
+            and not re.search(r"\b(INSERT|UPDATE|DELETE|MERGE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|COPY|CALL|DO|SET)\b",
+                              body, re.I))
+
 
 # 1. Agent tools are read-only ------------------------------------------------
 READ_ONLY = {
     "n8n-nodes-base.googleCalendarTool": {"getAll", "get"},
     "n8n-nodes-base.gmailTool": {"getAll", "get"},
+    "n8n-nodes-base.postgresTool": {"executeQuery"},  # + select_only() below
 }
 tools = [s for s, _, t in edges(asst, "ai_tool")]
 bad = [f"{t} ({A[t]['type'].split('.')[-1]}:{A[t]['parameters'].get('operation')})"
        for t in tools
-       if A[t]["type"] not in READ_ONLY or A[t]["parameters"].get("operation") not in READ_ONLY[A[t]["type"]]]
+       if A[t]["type"] not in READ_ONLY or A[t]["parameters"].get("operation") not in READ_ONLY[A[t]["type"]]
+       or (A[t]["type"].endswith("postgresTool") and not select_only(A[t]["parameters"].get("query", "")))]
 report("agent tools are read-only", bool(tools) and not bad, ", ".join(bad) or f"{len(tools)} tools")
 
 # 2. Nothing else is wired into the agent as a tool/sub-agent with write power
@@ -85,12 +98,12 @@ inv = [c["name"] for c in create
        if c["parameters"].get("additionalFields", {}).get("attendees")
        or c["parameters"].get("additionalFields", {}).get("sendUpdates") not in ("none",)]
 report("no attendees, sendUpdates=none", not inv, ", ".join(inv))
-gmail_writes = [n["name"] for wf in (asst, speak, brief) for n in wf["nodes"]
+gmail_writes = [n["name"] for wf in ALL for n in wf["nodes"]
                 if "gmail" in n["type"].lower() and n["parameters"].get("operation") in WRITE_OPS]
 report("no Gmail write operations anywhere", not gmail_writes, ", ".join(gmail_writes))
 
 # 7. SQL is parameterized -------------------------------------------------------
-pg = [n for wf in (asst,) for n in wf["nodes"] if n["type"] == "n8n-nodes-base.postgres"]
+pg = [n for wf in ALL for n in wf["nodes"] if n["type"] in ("n8n-nodes-base.postgres", "n8n-nodes-base.postgresTool")]
 interp = [n["name"] for n in pg if "{{" in n["parameters"].get("query", "") or n["parameters"].get("query", "").startswith("=")]
 noparams = [n["name"] for n in pg if "$1" in n["parameters"].get("query", "")
             and not str(n["parameters"].get("options", {}).get("queryReplacement", "")).startswith("={{ [")]
@@ -109,20 +122,30 @@ report("second chat-id gate in 'Route update'", "TELEGRAM_CHAT_ID" in route_src 
 
 # 9. Generated JSON in sync with src/ -------------------------------------------
 srcs = {p.read_text(encoding="utf-8") for p in (ROOT / "src").rglob("*.js")} | {p.read_text(encoding="utf-8") for p in (ROOT / "src").rglob("*.sql")}
-stale = [f"{wf['name'][:12]}/{n['name']}" for wf in (asst, speak, brief) for n in wf["nodes"]
+stale = [f"{wf['name'][:12]}/{n['name']}" for wf in ALL for n in wf["nodes"]
          if (n["parameters"].get("jsCode") and n["parameters"]["jsCode"] not in srcs)
          or (n["parameters"].get("operation") == "executeQuery" and n["parameters"]["query"] not in srcs)]
 report("workflows in sync with src/ (regenerated)", not stale, ", ".join(stale[:3]))
 
 # 10. No secrets committed into workflows ---------------------------------------
-blob = "\n".join(json.dumps(w) for w in (asst, speak, brief))
+blob = "\n".join(json.dumps(w) for w in ALL)
 secrets = re.findall(r"\d{6,}:[A-Za-z0-9_-]{30,}|AIza[0-9A-Za-z_-]{30,}|sk-[A-Za-z0-9]{20,}", blob)
 report("no secrets in workflow JSON", not secrets, f"{len(secrets)} found" if secrets else "")
 
 # 11. Cross-workflow references ---------------------------------------------------
-ids = {w["id"] for w in (asst, speak, brief)}
+ids = {w["id"] for w in ALL}
 calls = [n["parameters"]["workflowId"]["value"] for w in (asst, brief) for n in w["nodes"]
          if n["type"] == "n8n-nodes-base.executeWorkflow"]
 report("sub-workflow calls resolve", bool(calls) and all(c in ids for c in calls), ", ".join(sorted(set(calls))))
+
+# 12. University mailbox is only read, and its copy only feeds the database --------
+imap = [n for n in uni["nodes"] if n["type"] == "n8n-nodes-base.emailReadImap"]
+imap_ok = len(imap) == 1 and imap[0]["parameters"].get("postProcessAction") == "nothing" \
+    and not imap[0]["parameters"].get("downloadAttachments")
+report("IMAP trigger leaves the mailbox untouched", imap_ok,
+       imap[0]["parameters"].get("postProcessAction", "default=read") if imap else "missing")
+UNI_ALLOWED = {"n8n-nodes-base.emailReadImap", "n8n-nodes-base.code", "n8n-nodes-base.postgres"}
+extra = [n["name"] for n in uni["nodes"] if n["type"] not in UNI_ALLOWED]
+report("uni mail workflow: IMAP -> code -> postgres only", not extra, ", ".join(extra))
 
 sys.exit(1 if failed else 0)

@@ -12,13 +12,14 @@ Publish all three workflows, restart n8n, prove the briefing works end to end an
    `docker compose exec -T n8n n8n publish:workflow --id=mbSpeakVoiceNote`
    `docker compose exec -T n8n n8n publish:workflow --id=mbMorningBrief01`
    `docker compose exec -T n8n n8n publish:workflow --id=mbAssistant00001`
+   `docker compose exec -T n8n n8n publish:workflow --id=mbUniMailIngest1` (needs `assistant.uni_emails`: re-apply `docker/postgres/init/01-assistant.sql` on an existing volume)
 2. `docker compose restart n8n`, then `./scripts/stack-health.sh`.
 3. `./scripts/run-briefing.sh`. Runs the briefing once and prints only the verdict. A voice note should arrive on the user's phone.
 4. `./scripts/tg-webhook-info.sh`
 5. Credential errors in step 3 ("credentials not found/invalid") → RESULT blocked, NEEDS_HUMAN naming the node. Don't retry.
 
 ## Acceptance criteria
-- [ ] 3 publish commands succeeded
+- [ ] 4 publish commands succeeded
 - [ ] `run-briefing: PASS`
 - [ ] `webhook url: set` and it starts with the public `WEBHOOK_URL` host
 - [ ] `webhook last_error: none` (or older than the restart)
