@@ -1,10 +1,15 @@
 // Code node "Decision outcome" (Run Once for All Items)
 // Input: the row returned by the atomic "Claim decision" query, or an empty
 // item if the proposal doesn't exist (node has alwaysOutputData on).
-// Output `route`: OUTCOME.create = create the event, OUTCOME.cardOnly = just update the card
-// (must match OUTCOME in src/build_workflows.py).
+// Output `route`: OUTCOME.execute = run the approved action, OUTCOME.cardOnly = just update
+// the card (must match OUTCOME in src/build_workflows.py). "Which action?" then picks the
+// writer from `kind`.
 
-const OUTCOME = { create: 0, cardOnly: 1 };
+const OUTCOME = { execute: 0, cardOnly: 1 };
+const WORKING = {
+  calendar_event: 'Adding…', event_move: 'Moving…', event_delete: 'Deleting…',
+  task_add: 'Adding…', task_done: 'Marking done…', task_delete: 'Deleting…',
+};
 
 const r = $('Route update').first().json;
 const row = $input.first().json || {};
@@ -18,8 +23,8 @@ if (!row.id) {
   toast = 'Suggestion not found';
   editText = `${base}\n\n⚠️ This suggestion no longer exists.`;
 } else if (row.ok && row.status === 'approved') {
-  route = OUTCOME.create;
-  toast = 'Adding…';
+  route = OUTCOME.execute;
+  toast = WORKING[row.kind] || 'Working…';
   editText = null; // set by "Mark executed" / "Mark failed"
 } else if (row.ok && row.status === 'declined') {
   toast = 'Declined';
@@ -36,5 +41,8 @@ if (!row.id) {
 }
 
 return [{
-  json: { route, toast, editText, proposalId: r.proposalId, payload: row.payload || null, summary: base },
+  json: {
+    route, toast, editText, proposalId: r.proposalId,
+    kind: row.kind || null, payload: row.payload || null, summary: base,
+  },
 }];

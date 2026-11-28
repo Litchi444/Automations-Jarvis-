@@ -47,5 +47,7 @@ case "$(env_get BACKUP_AGE_RECIPIENT)" in
   *)     info "backups (optional)" "BACKUP_AGE_RECIPIENT unset: no backups (README 9d)" ;;
 esac
 [ -n "$(env_get N8N_API_KEY)" ] && info "N8N_API_KEY (optional)" "set" || info "N8N_API_KEY (optional)" "unset: execution summaries disabled"
+[ -n "$(env_get SCHOOL_ICS_URL)" ] && info "SCHOOL_ICS_URL (optional)" "set" || info "SCHOOL_ICS_URL (optional)" "unset: briefing has no timetable (README 5b)"
+[ -n "$(env_get SCHOOL_CALENDAR_ID)" ] && info "SCHOOL_CALENDAR_ID (optional)" "set" || info "SCHOOL_CALENDAR_ID (optional)" "unset: Jarvis cannot list classes (README 5b)"
 
 exit "$FAILED"

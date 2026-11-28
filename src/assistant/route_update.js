@@ -5,7 +5,7 @@
 //
 // Output `route`: see ROUTE (must match ROUTE in src/build_workflows.py).
 
-const ROUTE = { voice: 0, text: 1, callback: 2, style: 3 };
+const ROUTE = { voice: 0, text: 1, callback: 2, style: 3, undo: 4 };
 
 const allowed = String($env.TELEGRAM_CHAT_ID || '').trim();
 if (!allowed) throw new Error('TELEGRAM_CHAT_ID is not set in the environment');
@@ -20,17 +20,18 @@ if (u.callback_query) {
   const fromId = String(cq.from?.id ?? '');
   if (chatId !== allowed || fromId !== allowed) return [];
 
-  const m = String(cq.data || '').match(/^(ap|no):(\d{1,18})$/);
+  // ap/no = approve/decline a card, un = undo an instant task action.
+  const m = String(cq.data || '').match(/^(ap|no|un):(\d{1,18})$/);
   if (!m) return [];
 
   return [{
     json: {
-      route: ROUTE.callback,
+      route: m[1] === 'un' ? ROUTE.undo : ROUTE.callback,
       kind: 'callback',
       chatId,
       callbackId: cq.id,
       messageId: cq.message.message_id,
-      action: m[1] === 'ap' ? 'approve' : 'decline',
+      action: { ap: 'approve', no: 'decline', un: 'undo' }[m[1]],
       proposalId: m[2],
     },
   }];

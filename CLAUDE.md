@@ -5,9 +5,12 @@ Self-hosted n8n 2.x stack: Telegram voice/text assistant ("Jarvis") with human-a
 ## Non-negotiable design rule
 **The AI never gets write access.** Agent tools stay read-only. Anything that changes the outside world goes: agent JSON proposal → `parse_agent_output.js` validation → `assistant.proposals` row → Telegram card → user tap → `claim_decision.sql` (atomic) → plain workflow node using the STORED payload. Don't add write tools to the agent, don't let the agent re-generate a payload after approval, and don't add attendees or email-sending without the user asking explicitly.
 
+**One exception, chosen by the user (2026-11-28): instant to-do actions.** `task_add` / `task_done` skip the card ONLY when the user's own message (text or voice transcript) contains to-do / done words (`INSTANT` gate in `parse_agent_output.js`, plain regex, never the agent). They are logged first (`insert_instant.sql`, task kinds only), run from the stored row, and confirmed with an Undo button (`claim_undo.sql`, atomic, 24 h). Deletes (tasks, events) and event moves always need a card; on approval they re-fetch the target and refuse if it no longer matches the card (`verify_target.js`). Calendar writes stay on the primary calendar (the school timetable is never written). Don't widen the instant gate to other kinds.
+
 ## Ground truth (verified against n8n 2.48 source, don't "fix" back)
 - n8n Telegram node has no sendVoice → HTTP Request to the Bot API.
 - Telegram Trigger must be ≥ v1.4 when `chatIds` is set, or button taps (callback_query) are dropped.
+- Google Tasks node is v1 (`googleTasksOAuth2Api`, `usableAsTool` → `googleTasksTool`); `task` = list id (`@default`), `dueDate` must be RFC 3339. Calendar `update` puts `start`/`end`/`sendUpdates` in `updateFields`, `delete` puts `sendUpdates` in `options`.
 - Gemini TTS returns raw PCM s16le/24 kHz mono → `pcm_to_wav.js` → ffmpeg → OGG/Opus.
 - n8n 2.x image: no apk/apt, maybe no shell for RUN → Dockerfile uses COPY only.
 - n8n 2.x defaults: Execute Command excluded (`NODES_EXCLUDE`), file nodes confined to `/home/node/.n8n-files`, `$env` blocked unless `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`.

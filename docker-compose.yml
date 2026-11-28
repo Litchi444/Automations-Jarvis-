@@ -78,6 +78,9 @@ services:
       # Workflow secrets
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      # School timetable (optional): ICS link for the briefing, Google calendar id for Jarvis.
+      SCHOOL_ICS_URL: ${SCHOOL_ICS_URL:-}
+      SCHOOL_CALENDAR_ID: ${SCHOOL_CALENDAR_ID:-}
     volumes:
       - n8n_data:/home/node/.n8n
       - n8n_files:/home/node/.n8n-files

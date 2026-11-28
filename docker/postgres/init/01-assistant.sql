@@ -9,16 +9,29 @@ CREATE SCHEMA IF NOT EXISTS assistant;
 CREATE TABLE IF NOT EXISTS assistant.proposals (
     id          bigserial PRIMARY KEY,
     chat_id     text        NOT NULL,
-    kind        text        NOT NULL CHECK (kind IN ('calendar_event')),
+    kind        text        NOT NULL,          -- allowed values: proposals_kind_check below
     payload     jsonb       NOT NULL,          -- exactly what gets executed on approval
     summary     text        NOT NULL,          -- exactly what the user saw on the card
-    status      text        NOT NULL DEFAULT 'pending'
-                CHECK (status IN ('pending', 'approved', 'declined', 'expired', 'executed', 'failed')),
+    status      text        NOT NULL DEFAULT 'pending', -- allowed values: proposals_status_check below
     created_at  timestamptz NOT NULL DEFAULT now(),
     expires_at  timestamptz NOT NULL DEFAULT now() + interval '12 hours',
     decided_at  timestamptz,
     result      jsonb                          -- event id/link, or error
 );
+
+-- Kept outside CREATE TABLE so an existing volume picks up new kinds / statuses on re-apply.
+-- Instant rows (instant = true): task_add / task_done the user asked for in their own message,
+-- run without a tap and undoable for 24 h ('undone'). Everything else needs a tap.
+ALTER TABLE assistant.proposals ADD COLUMN IF NOT EXISTS instant boolean NOT NULL DEFAULT false;
+ALTER TABLE assistant.proposals DROP CONSTRAINT IF EXISTS proposals_kind_check;
+ALTER TABLE assistant.proposals ADD CONSTRAINT proposals_kind_check CHECK (kind IN
+    ('calendar_event', 'event_move', 'event_delete', 'task_add', 'task_done', 'task_delete'));
+ALTER TABLE assistant.proposals DROP CONSTRAINT IF EXISTS proposals_status_check;
+ALTER TABLE assistant.proposals ADD CONSTRAINT proposals_status_check CHECK (status IN
+    ('pending', 'approved', 'declined', 'expired', 'executed', 'failed', 'undone'));
+ALTER TABLE assistant.proposals DROP CONSTRAINT IF EXISTS proposals_instant_check;
+ALTER TABLE assistant.proposals ADD CONSTRAINT proposals_instant_check
+    CHECK (NOT instant OR kind IN ('task_add', 'task_done'));
 
 CREATE INDEX IF NOT EXISTS proposals_chat_status_idx
     ON assistant.proposals (chat_id, status, expires_at);
@@ -69,6 +82,6 @@ CREATE TABLE IF NOT EXISTS assistant.chat_settings (
 
 -- Handy audit view: what did I approve / decline lately?
 CREATE OR REPLACE VIEW assistant.decision_log AS
-SELECT id, kind, status, summary, created_at, decided_at, result
+SELECT id, kind, status, summary, created_at, decided_at, result, instant
   FROM assistant.proposals
  ORDER BY created_at DESC;

@@ -31,9 +31,21 @@ GEMINI_AUTH = {"authentication": "genericCredentialType", "genericAuthType": "ht
 PRIMARY_CAL = {"__rl": True, "mode": "list", "value": "primary", "cachedResultName": "Primary calendar"}
 # Switch output indices. The Code node that feeds each Switch must declare the
 # identical JS constant (checked by code()), so JS and wiring cannot drift.
-ROUTE = {"voice": 0, "text": 1, "callback": 2, "style": 3}  # "Route update" -> "Route"
+ROUTE = {"voice": 0, "text": 1, "callback": 2, "style": 3, "undo": 4}  # "Route update" -> "Route"
 REPLY = {"voice": 0, "text": 1}                  # "Parse + validate" -> "Voice or text?"
-OUTCOME = {"create": 0, "cardOnly": 1}           # "Decision outcome" -> "Approved?" (0 = write gate, audited)
+OUTCOME = {"execute": 0, "cardOnly": 1}          # "Decision outcome" -> "Approved?" (0 = write gate, audited)
+MODE = {"card": 0, "instant": 1}                 # "One item per proposal" -> "Card or instant?" (1 = instant gate, audited)
+UNDO = {"run": 0, "cardOnly": 1}                 # "Undo outcome" -> "Undo?" (0 = undo gate, audited)
+# Proposal kind -> Switch output that picks the writer. The Switch expression is generated
+# from these maps, so there is no JS copy to drift.
+ACTION = {"calendar_event": 0, "event_move": 1, "event_delete": 1,
+          "task_add": 2, "task_done": 3, "task_delete": 3}   # "Which action?"
+EVENT_CHANGE = {"event_move": 0, "event_delete": 1}           # "Event change"
+TASK_CHANGE = {"task_done": 0, "task_delete": 1}              # "Task change"
+TASK_OP = {"task_add": 0, "task_done": 1}                     # "Instant task op", "Undo which?"
+TASKLIST = "@default"                                         # the user's default Google Tasks list
+# The school timetable, subscribed in Google Calendar from its ICS link (read-only for the agent).
+SCHOOL_CAL = {"__rl": True, "mode": "id", "value": "={{ $env.SCHOOL_CALENDAR_ID }}"}
 
 
 def read(rel: str) -> str:
@@ -125,6 +137,11 @@ def code(rel, **consts):
 def http_json(method, url, body, **opts):
     return {"method": method, "url": url, "sendBody": True, "specifyBody": "json",
             "jsonBody": body, "options": opts or {}}
+
+
+def kind_switch(mapping, ref="$json.kind"):
+    return {"mode": "expression", "numberOutputs": max(mapping.values()) + 1,
+            "output": f"={{{{ ({json.dumps(mapping)})[{ref}] }}}}"}
 
 
 def pg_query(sql_rel, replacement=None):
@@ -229,14 +246,14 @@ def build_speak():
 # 2) MORNING BRIEFING
 # ═══════════════════════════════════════════════════════════════════
 def build_briefing():
-    w = WF(BRIEFING_ID, "Morning Briefing (Gmail + Calendar → voice note)")
+    w = WF(BRIEFING_ID, "Morning Briefing (school day + Calendar + Tasks + Gmail → voice note)")
     w.node("Every day 07:30", "n8n-nodes-base.scheduleTrigger", 1.2, [0, 300], {
         "rule": {"interval": [{"field": "days", "daysInterval": 1,
                                "triggerAtHour": 7, "triggerAtMinute": 30}]}})
     w.node("Config", "n8n-nodes-base.set", 3.4, [220, 300], set_node(
         assign("textModel", TEXT_MODEL),
         assign("language", "English"),
-        assign("maxChars", 300, "number"),
+        assign("maxChars", 700, "number"),
         assign("timezone", "={{ $env.GENERIC_TIMEZONE || 'Europe/Paris' }}"),
     ))
     w.node("Get today events", "n8n-nodes-base.googleCalendar", 1.3, [440, 300], {
@@ -259,6 +276,20 @@ def build_briefing():
     w.node("Get style", "n8n-nodes-base.postgres", 2.6, [825, 300],
            pg_query("assistant/sql/load_style.sql", "={{ [ String($env.TELEGRAM_CHAT_ID || '') ] }}"),
            alwaysOutputData=True, executeOnce=True, onError="continueRegularOutput")
+    # The school's ICS feed, fetched fresh every morning (Google refreshes a subscribed
+    # calendar only every few hours, so a same-day room change would be missed). Never blocks.
+    w.node("Get school timetable", "n8n-nodes-base.httpRequest", 4.2, [850, 300], {
+        "method": "GET",
+        "url": "={{ String($env.SCHOOL_ICS_URL || '').trim().replace(/^webcal:/i, 'https:') }}",
+        "options": {"timeout": 30000,
+                    "response": {"response": {"responseFormat": "text", "outputPropertyName": "data"}}},
+    }, alwaysOutputData=True, executeOnce=True, onError="continueRegularOutput",
+        retryOnFail=True, maxTries=2, waitBetweenTries=5000)
+    w.node("School day", "n8n-nodes-base.code", 2, [870, 300], code("school_day.js"))
+    w.node("Get open tasks", "n8n-nodes-base.googleTasks", 1, [875, 300], {
+        "task": TASKLIST, "operation": "getAll", "returnAll": True,
+        "additionalFields": {"showCompleted": False},
+    }, alwaysOutputData=True, executeOnce=True, onError="continueRegularOutput")
     w.node("Build Gemini prompt", "n8n-nodes-base.code", 2, [880, 300], code("build_prompt.js"))
     w.node("Gemini: write script", "n8n-nodes-base.httpRequest", 4.2, [1100, 300], {
         **http_json("POST",
@@ -269,8 +300,24 @@ def build_briefing():
     w.node("Clean script", "n8n-nodes-base.code", 2, [1320, 300], code("clean_script.js"))
     w.node("Speak", "n8n-nodes-base.executeWorkflow", 1.2, [1540, 300], exec_speak())
     w.chain("Every day 07:30", "Config", "Get today events", "Get priority emails",
-            "Get uni emails", "Get style", "Build Gemini prompt", "Gemini: write script", "Clean script", "Speak")
+            "Get uni emails", "Get style", "Get school timetable", "School day", "Get open tasks",
+            "Build Gemini prompt", "Gemini: write script", "Clean script", "Speak")
     return "workflow_morning_briefing.json", w
+
+
+def task_create_params():
+    """Google Tasks create from the stored payload { title, due, notes }."""
+    return {"task": TASKLIST, "operation": "create", "title": "={{ $json.payload.title }}",
+            "additionalFields": {
+                "dueDate": "={{ $json.payload.due ? $json.payload.due + 'T00:00:00.000Z' : '' }}",
+                "notes": "={{ $json.payload.notes || '' }}",
+            }}
+
+
+def task_update_params(status):
+    """Google Tasks status change on the stored payload's task id."""
+    return {"task": TASKLIST, "operation": "update", "taskId": "={{ $json.payload.taskId }}",
+            "updateFields": {"status": status}}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -354,6 +401,21 @@ def build_assistant():
         "timeMin": "={{ $fromAI('timeMin', 'Range start, ISO 8601 with timezone offset', 'string') }}",
         "timeMax": "={{ $fromAI('timeMax', 'Range end, ISO 8601 with timezone offset', 'string') }}",
         "options": {"orderBy": "startTime"}})
+    w.node("School: list classes", "n8n-nodes-base.googleCalendarTool", 1.3, [2040, 800], {
+        "descriptionType": "manual",
+        "toolDescription": ("Read-only. Lists classes in the user's school timetable (subject, room, times) "
+                            "between two ISO 8601 datetimes (with timezone offset). Never move or delete these."),
+        "resource": "event", "operation": "getAll", "calendar": SCHOOL_CAL,
+        "returnAll": False, "limit": 50,
+        "timeMin": "={{ $fromAI('timeMin', 'Range start, ISO 8601 with timezone offset', 'string') }}",
+        "timeMax": "={{ $fromAI('timeMax', 'Range end, ISO 8601 with timezone offset', 'string') }}",
+        "options": {"orderBy": "startTime"}})
+    w.node("Tasks: list", "n8n-nodes-base.googleTasksTool", 1, [2180, 800], {
+        "descriptionType": "manual",
+        "toolDescription": ("Read-only. Lists the user's open to-do tasks (Google Tasks) with their id, "
+                            "title, due date and notes."),
+        "task": TASKLIST, "operation": "getAll", "returnAll": False, "limit": 100,
+        "additionalFields": {"showCompleted": False}})
     w.node("Gmail: search", "n8n-nodes-base.gmailTool", 2.1, [2180, 640], {
         "descriptionType": "manual",
         "toolDescription": ("Read-only. Searches Gmail with Gmail search syntax and returns up to 10 "
@@ -404,9 +466,11 @@ def build_assistant():
         "={{ JSON.stringify({ chat_id: $json.chatId, text: $json.reply }) }}"),
         retryOnFail=True, maxTries=3, waitBetweenTries=3000)
 
-    # ── Proposals → approval cards ──────────────────────────
+    # ── Proposals: approval card, or instant (task_add / task_done the user asked for) ──
     w.node("One item per proposal", "n8n-nodes-base.code", 2, [2420, 560],
-           code("assistant/proposals_to_items.js"))
+           code("assistant/proposals_to_items.js", MODE=MODE))
+    w.node("Card or instant?", "n8n-nodes-base.switch", 3.2, [2530, 560], {
+        "mode": "expression", "numberOutputs": len(MODE), "output": "={{ $json.mode }}"})
     w.node("Save proposal", "n8n-nodes-base.postgres", 2.6, [2640, 560], pg_query(
         "assistant/sql/insert_proposal.sql",
         f"={{{{ [ $json.chatId, $json.kind, $json.payload, $json.summary, {cfg}.proposalTtlHours ] }}}}"))
@@ -414,11 +478,38 @@ def build_assistant():
         "POST", f"={TG}/sendMessage",
         "={{ JSON.stringify({\n"
         "  chat_id: $json.chat_id,\n"
-        f"  text: $json.summary + '\\n\\nApprove to add it. Expires in ' + {cfg}.proposalTtlHours + ' h.',\n"
+        f"  text: $json.summary + '\\n\\nApprove? Expires in ' + {cfg}.proposalTtlHours + ' h.',\n"
         "  reply_markup: { inline_keyboard: [[\n"
         "    { text: '✅ Approve', callback_data: 'ap:' + $json.id },\n"
         "    { text: '❌ Decline', callback_data: 'no:' + $json.id }\n"
         "  ]] }\n"
+        "}) }}"), retryOnFail=True, maxTries=3, waitBetweenTries=3000)
+
+    # Instant: logged as approved first (insert_instant.sql only accepts task_add / task_done),
+    # then run from the STORED row, then confirmed with an Undo button.
+    log = "$('Log instant action').item.json"
+    w.node("Log instant action", "n8n-nodes-base.postgres", 2.6, [2640, 760], pg_query(
+        "assistant/sql/insert_instant.sql",
+        "={{ [ $json.chatId, $json.kind, $json.payload, $json.summary ] }}"))
+    w.node("Instant task op", "n8n-nodes-base.switch", 3.2, [2860, 760], kind_switch(TASK_OP))
+    w.node("Add task now", "n8n-nodes-base.googleTasks", 1, [3080, 700], task_create_params(),
+           onError="continueErrorOutput")
+    w.node("Complete task now", "n8n-nodes-base.googleTasks", 1, [3080, 860], task_update_params("completed"),
+           onError="continueErrorOutput")
+    w.node("Mark instant executed", "n8n-nodes-base.postgres", 2.6, [3300, 700], pg_query(
+        "assistant/sql/mark_executed.sql",
+        f"={{{{ [ {log}.id, {{ id: $json.id, title: $json.title }} ] }}}}"))
+    w.node("Mark instant failed", "n8n-nodes-base.postgres", 2.6, [3300, 860], pg_query(
+        "assistant/sql/mark_failed.sql",
+        f"={{{{ [ {log}.id, String($json.error?.message || $json.error || 'unknown error') ] }}}}"))
+    w.node("Send instant result", "n8n-nodes-base.httpRequest", 4.2, [3520, 780], http_json(
+        "POST", f"={TG}/sendMessage",
+        "={{ JSON.stringify({\n"
+        f"  chat_id: {route}.chatId,\n"
+        "  text: $json.editText,\n"
+        "  reply_markup: $json.undoable\n"
+        "    ? { inline_keyboard: [[ { text: '↩️ Undo', callback_data: 'un:' + $json.id } ]] }\n"
+        "    : undefined\n"
         "}) }}"), retryOnFail=True, maxTries=3, waitBetweenTries=3000)
 
     # ── /style command: plain node, the agent never writes the setting ──
@@ -429,14 +520,15 @@ def build_assistant():
         f"={{{{ JSON.stringify({{ chat_id: {route}.chatId, text: $json.reply }}) }}}}"),
         retryOnFail=True, maxTries=3, waitBetweenTries=3000)
 
-    # ── Button tap → atomic decision → deterministic execution ──
+    # ── Button tap → atomic decision → deterministic execution of the STORED payload ──
     w.node("Claim decision", "n8n-nodes-base.postgres", 2.6, [820, 880], pg_query(
         "assistant/sql/claim_decision.sql",
         "={{ [ $json.proposalId, $json.action, $json.chatId ] }}"), alwaysOutputData=True)
     w.node("Decision outcome", "n8n-nodes-base.code", 2, [1040, 880], code("assistant/callback_outcome.js", OUTCOME=OUTCOME))
     w.node("Approved?", "n8n-nodes-base.switch", 3.2, [1260, 880], {
         "mode": "expression", "numberOutputs": len(OUTCOME), "output": "={{ $json.route }}"})
-    w.node("Create calendar event", "n8n-nodes-base.googleCalendar", 1.3, [1480, 780], {
+    w.node("Which action?", "n8n-nodes-base.switch", 3.2, [1370, 880], kind_switch(ACTION))
+    w.node("Create calendar event", "n8n-nodes-base.googleCalendar", 1.3, [1480, 620], {
         "resource": "event", "operation": "create", "calendar": PRIMARY_CAL,
         "start": "={{ $json.payload.start }}",
         "end": "={{ $json.payload.end }}",
@@ -448,17 +540,76 @@ def build_assistant():
             "sendUpdates": "none",
         },
     }, onError="continueErrorOutput")
-    w.node("Mark executed", "n8n-nodes-base.postgres", 2.6, [1700, 720], pg_query(
+    # Move / delete: fetch the event by its stored id, check it is still the one on the card.
+    # Primary calendar only, so a school class can never be moved or deleted.
+    w.node("Get event", "n8n-nodes-base.googleCalendar", 1.3, [1480, 740], {
+        "resource": "event", "operation": "get", "calendar": PRIMARY_CAL,
+        "eventId": "={{ $json.payload.eventId }}", "options": {},
+    }, onError="continueErrorOutput")
+    w.node("Check event", "n8n-nodes-base.code", 2, [1590, 740], code("assistant/verify_target.js"),
+           onError="continueErrorOutput")
+    w.node("Event change", "n8n-nodes-base.switch", 3.2, [1650, 740], kind_switch(EVENT_CHANGE))
+    w.node("Move calendar event", "n8n-nodes-base.googleCalendar", 1.3, [1700, 660], {
+        "resource": "event", "operation": "update", "calendar": PRIMARY_CAL,
+        "eventId": "={{ $json.payload.eventId }}",
+        "useDefaultReminders": True,
+        "updateFields": {
+            "start": "={{ $json.payload.start }}",
+            "end": "={{ $json.payload.end }}",
+            "sendUpdates": "none",
+        },
+    }, onError="continueErrorOutput")
+    w.node("Delete calendar event", "n8n-nodes-base.googleCalendar", 1.3, [1700, 780], {
+        "resource": "event", "operation": "delete", "calendar": PRIMARY_CAL,
+        "eventId": "={{ $json.payload.eventId }}",
+        "options": {"sendUpdates": "none"},
+    }, onError="continueErrorOutput")
+    w.node("Add task", "n8n-nodes-base.googleTasks", 1, [1480, 900], task_create_params(),
+           onError="continueErrorOutput")
+    # Done / delete via a card: same fetch-and-check by the stored task id.
+    w.node("Get task", "n8n-nodes-base.googleTasks", 1, [1480, 1020], {
+        "task": TASKLIST, "operation": "get", "taskId": "={{ $json.payload.taskId }}",
+    }, onError="continueErrorOutput")
+    w.node("Check task", "n8n-nodes-base.code", 2, [1590, 1020], code("assistant/verify_target.js"),
+           onError="continueErrorOutput")
+    w.node("Task change", "n8n-nodes-base.switch", 3.2, [1650, 1020], kind_switch(TASK_CHANGE))
+    w.node("Complete task", "n8n-nodes-base.googleTasks", 1, [1700, 960], task_update_params("completed"),
+           onError="continueErrorOutput")
+    w.node("Delete task", "n8n-nodes-base.googleTasks", 1, [1700, 1080], {
+        "task": TASKLIST, "operation": "delete", "taskId": "={{ $json.payload.taskId }}",
+    }, onError="continueErrorOutput")
+    w.node("Mark executed", "n8n-nodes-base.postgres", 2.6, [1900, 720], pg_query(
         "assistant/sql/mark_executed.sql",
-        f"={{{{ [ {route}.proposalId, {{ eventId: $json.id, link: $json.htmlLink }} ] }}}}"))
-    w.node("Mark failed", "n8n-nodes-base.postgres", 2.6, [1700, 880], pg_query(
+        f"={{{{ [ {route}.proposalId, {{ id: $json.id, title: $json.title || $json.summary, link: $json.htmlLink }} ] }}}}"))
+    w.node("Mark failed", "n8n-nodes-base.postgres", 2.6, [1900, 880], pg_query(
         "assistant/sql/mark_failed.sql",
         f"={{{{ [ {route}.proposalId, String($json.error?.message || $json.error || 'unknown error') ] }}}}"))
-    w.node("Answer button", "n8n-nodes-base.httpRequest", 4.2, [1960, 820], http_json(
+
+    # ── Undo tap (instant task actions only) → atomic claim → inverse on the STORED result ──
+    w.node("Claim undo", "n8n-nodes-base.postgres", 2.6, [820, 1340], pg_query(
+        "assistant/sql/claim_undo.sql", "={{ [ $json.proposalId, $json.chatId ] }}"), alwaysOutputData=True)
+    w.node("Undo outcome", "n8n-nodes-base.code", 2, [1040, 1340], code("assistant/undo_outcome.js", UNDO=UNDO))
+    w.node("Undo?", "n8n-nodes-base.switch", 3.2, [1260, 1340], {
+        "mode": "expression", "numberOutputs": len(UNDO), "output": "={{ $json.route }}"})
+    w.node("Undo which?", "n8n-nodes-base.switch", 3.2, [1370, 1340], kind_switch(TASK_OP))
+    w.node("Remove added task", "n8n-nodes-base.googleTasks", 1, [1480, 1280], {
+        "task": TASKLIST, "operation": "delete", "taskId": "={{ $json.result.id }}",
+    }, onError="continueErrorOutput")
+    w.node("Reopen task", "n8n-nodes-base.googleTasks", 1, [1480, 1400], {
+        "task": TASKLIST, "operation": "update", "taskId": "={{ $json.result.id }}",
+        "updateFields": {"status": "needsAction"},
+    }, onError="continueErrorOutput")
+    w.node("Mark undone", "n8n-nodes-base.postgres", 2.6, [1700, 1280], pg_query(
+        "assistant/sql/mark_undone.sql", f"={{{{ [ {route}.proposalId ] }}}}"))
+    w.node("Mark undo failed", "n8n-nodes-base.postgres", 2.6, [1700, 1400], pg_query(
+        "assistant/sql/mark_undo_failed.sql",
+        f"={{{{ [ {route}.proposalId, String($json.error?.message || $json.error || 'unknown error') ] }}}}"))
+
+    w.node("Answer button", "n8n-nodes-base.httpRequest", 4.2, [2120, 820], http_json(
         "POST", f"={TG}/answerCallbackQuery",
         f"={{{{ JSON.stringify({{ callback_query_id: {route}.callbackId, text: $json.toast }}) }}}}"),
         onError="continueRegularOutput")
-    w.node("Update card", "n8n-nodes-base.httpRequest", 4.2, [1960, 980], http_json(
+    w.node("Update card", "n8n-nodes-base.httpRequest", 4.2, [2120, 980], http_json(
         "POST", f"={TG}/editMessageText",
         "={{ JSON.stringify({\n"
         f"  chat_id: {route}.chatId,\n"
@@ -475,26 +626,65 @@ def build_assistant():
     w.link("Route", "Load style", ROUTE["text"])
     w.link("Route", "Claim decision", ROUTE["callback"])
     w.link("Route", "Set style", ROUTE["style"])
+    w.link("Route", "Claim undo", ROUTE["undo"])
     w.chain("Get voice file path", "Download voice", "Audio to base64", "Gemini: transcribe", "Load style")
     w.chain("Load style", "Prepare agent input", "Jarvis", "Parse + validate")
     w.link("Set style", "Send style reply")
     w.link("Gemini chat model", "Jarvis", kind="ai_languageModel")
     w.link("Chat memory", "Jarvis", kind="ai_memory")
-    for tool in ("Calendar: list events", "Gmail: search", "Gmail: read email",
-                 "Uni mail: search", "Uni mail: read email", "Skills: list", "Skills: read"):
+    for tool in ("Calendar: list events", "School: list classes", "Tasks: list", "Gmail: search",
+                 "Gmail: read email", "Uni mail: search", "Uni mail: read email", "Skills: list", "Skills: read"):
         w.link(tool, "Jarvis", kind="ai_tool")
     w.link("Parse + validate", "Voice or text?")
     w.link("Parse + validate", "One item per proposal")
     w.link("Voice or text?", "Speak reply", REPLY["voice"])
     w.link("Voice or text?", "Send text reply", REPLY["text"])
-    w.chain("One item per proposal", "Save proposal", "Send approval card")
+    w.link("One item per proposal", "Card or instant?")
+    w.link("Card or instant?", "Save proposal", MODE["card"])
+    w.link("Card or instant?", "Log instant action", MODE["instant"])
+    w.link("Save proposal", "Send approval card")
+    w.link("Log instant action", "Instant task op")
+    w.link("Instant task op", "Add task now", TASK_OP["task_add"])
+    w.link("Instant task op", "Complete task now", TASK_OP["task_done"])
+    for n in ("Add task now", "Complete task now"):
+        w.link(n, "Mark instant executed", 0)
+        w.link(n, "Mark instant failed", 1)
+    w.link("Mark instant executed", "Send instant result")
+    w.link("Mark instant failed", "Send instant result")
+
     w.chain("Claim decision", "Decision outcome", "Approved?")
-    w.link("Approved?", "Create calendar event", OUTCOME["create"])
+    w.link("Approved?", "Which action?", OUTCOME["execute"])
     w.link("Approved?", "Answer button", OUTCOME["cardOnly"])
     w.link("Approved?", "Update card", OUTCOME["cardOnly"])
-    w.link("Create calendar event", "Mark executed", 0)
-    w.link("Create calendar event", "Mark failed", 1)
-    for n in ("Mark executed", "Mark failed"):
+    w.link("Which action?", "Create calendar event", ACTION["calendar_event"])
+    w.link("Which action?", "Get event", ACTION["event_move"])
+    w.link("Which action?", "Add task", ACTION["task_add"])
+    w.link("Which action?", "Get task", ACTION["task_done"])
+    for get, check, change in (("Get event", "Check event", "Event change"), ("Get task", "Check task", "Task change")):
+        w.link(get, check, 0)
+        w.link(get, "Mark failed", 1)
+        w.link(check, change, 0)
+        w.link(check, "Mark failed", 1)
+    w.link("Event change", "Move calendar event", EVENT_CHANGE["event_move"])
+    w.link("Event change", "Delete calendar event", EVENT_CHANGE["event_delete"])
+    w.link("Task change", "Complete task", TASK_CHANGE["task_done"])
+    w.link("Task change", "Delete task", TASK_CHANGE["task_delete"])
+    for n in ("Create calendar event", "Move calendar event", "Delete calendar event",
+              "Add task", "Complete task", "Delete task"):
+        w.link(n, "Mark executed", 0)
+        w.link(n, "Mark failed", 1)
+
+    w.chain("Claim undo", "Undo outcome", "Undo?")
+    w.link("Undo?", "Undo which?", UNDO["run"])
+    w.link("Undo?", "Answer button", UNDO["cardOnly"])
+    w.link("Undo?", "Update card", UNDO["cardOnly"])
+    w.link("Undo which?", "Remove added task", TASK_OP["task_add"])
+    w.link("Undo which?", "Reopen task", TASK_OP["task_done"])
+    for n in ("Remove added task", "Reopen task"):
+        w.link(n, "Mark undone", 0)
+        w.link(n, "Mark undo failed", 1)
+
+    for n in ("Mark executed", "Mark failed", "Mark undone", "Mark undo failed"):
         w.link(n, "Answer button")
         w.link(n, "Update card")
     return "workflow_assistant.json", w

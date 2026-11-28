@@ -1,8 +1,8 @@
 # Jarvis on n8n: Telegram voice assistant + morning briefing
 
-A self-hosted personal assistant you talk to on Telegram, by voice or text. It reads your Google Calendar and Gmail. **It can suggest things but never act on its own:** every suggestion arrives as a card with **Approve / Decline** buttons, and only your tap creates anything.
+A self-hosted personal assistant you talk to on Telegram, by voice or text. It reads your Google Calendar, school timetable, to-do list (Google Tasks) and Gmail. **It can suggest things but never act on its own:** every suggestion arrives as a card with **Approve / Decline** buttons, and only your tap creates, moves or deletes anything. The one exception you chose: when *you* ask it to add a task or mark one done, it does it right away and sends **↩️ Undo**.
 
-Every day at 07:30 it also sends a short spoken briefing of your day.
+Every day at 07:30 it also sends a short spoken briefing of your day: when your first class starts and where, breaks, lunch, when classes start again and finish, tasks due today, then email.
 
 ## Fastest path: let the Claude Code agent team deploy it
 
@@ -40,8 +40,8 @@ The **manager** reads `plan/STATUS.md` and runs the deployment one phase at a ti
 | Workflow | Trigger | Role |
 |---|---|---|
 | **Speak** (`workflow_speak.json`) | called by the briefing and Jarvis | text → Gemini TTS → ffmpeg OGG/Opus → Telegram voice note (text fallback if it fails) |
-| **Morning Briefing** | daily 07:30 | today's events + important unread Gmail + last 24 h of university mail → Gemini script → *Speak* |
-| **Assistant (Jarvis)** | Telegram messages + button taps | conversation, read-only tools, approval cards |
+| **Morning Briefing** | daily 07:30 | school day (from the timetable ICS link, worked out in code) + today's events + open tasks + important unread Gmail + last 24 h of university mail → Gemini script → *Speak* |
+| **Assistant (Jarvis)** | Telegram messages + button taps | conversation, read-only tools, approval cards, instant to-do actions with Undo |
 | **University mail → database** (`workflow_university_mail.json`) | new mail in the university IMAP inbox | copies each email into `assistant.uni_emails` (180-day retention). Never marks, moves or deletes mail. Jarvis searches the copy with fixed read-only SQL |
 
 ### How the assistant works
@@ -72,6 +72,8 @@ You (voice/text) ─► Telegram Trigger ─► Route update (only YOUR private 
 - **The AI has no write tools.** Its only tools are calendar listing, Gmail search and reading one email. Telling it not to act would be a polite request. Here, it has no means to act at all.
 - **Suggestions are data, not actions.** The agent returns JSON. A plain code step validates each suggestion: supported type only, timezone-explicit dates, not in the past, at most 12 h long, at most 3 per turn. It stores the exact payload, and the card shows that same stored data.
 - **Your tap runs plain workflow steps, without the AI.** A single SQL statement moves the suggestion out of `pending`, so a double-tap (or two taps racing) can't create it twice. Expired cards (default 12 h) are refused. The event is built from the stored payload, and the AI is never asked again.
+- **To-do exception, decided by code, not the AI.** A task add or "done" runs without a card only when *your* message (typed, or the voice transcript) contains to-do words ("TDL", "to-do", "tâche", "fini", "done"...). The agent cannot open that gate, so an email that tells it to add a task still produces a card. The action is logged first, runs from the stored row, and the confirmation carries **↩️ Undo** for 24 h (one atomic claim, like approvals).
+- **Deletes and moves always need a tap, and are re-checked.** Before deleting a task, or moving/deleting an event, the workflow fetches it by its stored id and refuses if its title or time no longer match the card. Only the primary calendar is written, so a school class can never be moved or deleted.
 - **Created events invite nobody.** The payload has no attendees and `sendUpdates` is `none`, so approving can't email third parties.
 - **Only you get in.** The trigger filters on your chat ID, and the first code step checks it again: private chat, sender = you. If `TELEGRAM_CHAT_ID` is missing, it fails closed.
 - **Every decision is logged** in `assistant.decision_log`.
@@ -93,7 +95,7 @@ You (voice/text) ─► Telegram Trigger ─► Route update (only YOUR private 
 - **A public HTTPS URL for n8n.** Telegram has to reach the assistant. Options (§9): a small VPS with a domain (about 5 €/month, Hetzner for example), or a Cloudflare Tunnel on your PC while you test. The morning briefing alone works without one.
 - Gemini API key ([aistudio.google.com](https://aistudio.google.com))
 - Telegram bot token (@BotFather) and your chat ID (@userinfobot). **Send `/start` to your bot once.**
-- A Google Cloud project with the **Gmail API** and **Google Calendar API** enabled
+- A Google Cloud project with the **Gmail API**, **Google Calendar API** and **Google Tasks API** enabled
 
 ## 2. Configure
 
@@ -141,11 +143,12 @@ Open the editor and create the owner account.
 
 Approving suggestions needs **calendar write** scope. n8n's Google Calendar credential requests it by default, but your Google consent screen must allow it.
 
-## 5. Credentials in n8n (7 total)
+## 5. Credentials in n8n (8 total)
 
 | Credential type | Used by | Fields |
 |---|---|---|
-| **Google Calendar OAuth2 API** | briefing, Jarvis tool, Create calendar event | Client ID + Secret → *Sign in* |
+| **Google Calendar OAuth2 API** | briefing, Jarvis tools (calendar + school), create / move / delete event | Client ID + Secret → *Sign in* |
+| **Google Tasks OAuth2 API** | briefing (*Get open tasks*), Jarvis *Tasks: list*, every task node | Client ID + Secret → *Sign in* |
 | **Gmail OAuth2 API** | briefing, Jarvis search/read tools | Client ID + Secret → *Sign in* |
 | **Header Auth** ("Gemini API key") | Gemini HTTP nodes (TTS, script, transcription) | Name `x-goog-api-key`, Value = your key |
 | **Google Gemini (PaLM) API** | Jarvis chat model | Host `https://generativelanguage.googleapis.com`, API key |
@@ -154,6 +157,15 @@ Approving suggestions needs **calendar write** scope. n8n's Google Calendar cred
 | **IMAP** ("University mail") | University mail → database | User = university login, Password = university password, Host `imap.univ-lemans.fr`, Port `993`, SSL/TLS on. If the connection fails on the certificate (the server presents `jaguar-r1.univ-lemans.fr`), enable *Allow Self-Signed Certificates* |
 
 (The Telegram token is also read from `.env` by the HTTP nodes. The trigger needs its own credential to register the webhook.)
+
+### 5b. School timetable and to-do list
+
+1. **Find the timetable link.** On your school's timetable site (ADE, Celcat...), use *Export* / *Subscribe* / *iCal* and copy the link (often ends in `.ics`, may start with `webcal://`). Keep it private.
+2. **Put it in Google Calendar:** Google Calendar → *Other calendars* → **+** → *From URL* → paste. It shows up as its own calendar on your phone. Google refreshes it every few hours, which is fine for browsing.
+3. **Tell Jarvis:** in `.env` set `SCHOOL_ICS_URL` (the link) and `SCHOOL_CALENDAR_ID` (Google Calendar → settings of that calendar → *Calendar ID*). Then `docker compose up -d` so n8n sees them. The briefing downloads the link itself every morning, so a room change made the same day is not missed. Both are optional: without them the briefing says there is no timetable.
+4. **To-do list:** nothing to set up beyond the *Google Tasks* credential. Jarvis uses your default list (*My Tasks*), visible in the Google Tasks app and next to Google Calendar.
+
+Existing database? Re-apply `01-assistant.sql` (command in §3): it widens the proposal kinds and adds the Undo status.
 
 ## 6. Import
 
@@ -182,7 +194,8 @@ Telegram allows one webhook per bot. If you use *Listen for test event* in the e
 | Where | Field | Default |
 |---|---|---|
 | Speak → Config | `ttsModel`, `voiceName`, `ttsStyle` | `gemini-3.1-flash-tts-preview`, `Kore` |
-| Briefing → Config | `textModel`, `language`, `maxChars` | `gemini-flash-lite-latest`, English, 300 |
+| Briefing → Config | `textModel`, `language`, `maxChars` | `gemini-flash-lite-latest`, English, 700 |
+| `school_day.js` | `MIN_BREAK_MIN`, `LUNCH` window | 10 min, 11:30–14:00 |
 | Assistant → Config | `transcribeModel`, `proposalTtlHours` | `gemini-flash-lite-latest`, 12 |
 | Assistant → Gemini chat model | `modelName` | `models/gemini-flash-lite-latest` (on the free tier, `gemini-flash-latest` often fails with 503 "high demand" or the 5 requests/minute cap) |
 | Assistant → Chat memory | `contextWindowLength` | 12 messages |

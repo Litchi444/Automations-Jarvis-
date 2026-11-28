@@ -1,5 +1,7 @@
 // Code node: "Build Gemini prompt" (Run Once for All Items)
-// Collects today's events + priority emails and builds the Gemini request body.
+// Collects today's school day, events, open tasks and priority emails, and builds the
+// Gemini request body. Times and rooms come pre-computed from "School day": the model
+// only reads them out.
 
 const cfg = $('Config').first().json;
 const tz = cfg.timezone || 'Europe/Paris';
@@ -17,6 +19,19 @@ const emails = $('Get priority emails').all()
 const uniEmails = $('Get uni emails').all()
   .map(i => i.json)
   .filter(m => m && m.id);
+
+// Today's class day from the school timetable (school_day.js). ok = false when unavailable.
+const school = $('School day').first().json || {};
+
+// Open Google Tasks (error item or empty when unavailable). Due today or overdue first.
+const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: tz });
+const tasks = $('Get open tasks').all()
+  .map(i => i.json)
+  .filter(t => t && t.id && t.title && t.status !== 'completed' && !t.deleted);
+const dueDay = t => (t.due ? String(t.due).slice(0, 10) : '');
+const dueTasks = tasks.filter(t => dueDay(t) && dueDay(t) <= todayIso)
+  .sort((a, b) => dueDay(a).localeCompare(dueDay(b)));
+const otherTasks = tasks.filter(t => !dueTasks.includes(t));
 
 // Answer style chosen with /style (load_style.sql row). Null fields, empty or error item
 // when none is chosen or the lookup failed: the briefing then keeps its default tone.
@@ -53,6 +68,27 @@ const uniLines = uniEmails.map(m =>
   `- From: ${senderName(m.from_addr)} | Subject: ${clip(m.subject || '(no subject)', 100)} | Preview: ${clip(m.preview, 160)}`
 );
 
+const schoolLines = [];
+if (!school.ok) {
+  schoolLines.push(`- ${school.error || 'timetable unavailable'}`);
+} else if (!school.classes?.length) {
+  schoolLines.push('- no classes today');
+} else {
+  const room = r => (r ? `, room ${clip(r, 60)}` : '');
+  schoolLines.push(`- First class: ${school.first.start}, ${clip(school.first.title, 80)}${room(school.first.room)}`);
+  schoolLines.push(...school.classes.map(c => `- Class ${c.start}-${c.end}: ${clip(c.title, 80)}${room(c.room)}`));
+  schoolLines.push(...school.breaks.map(b => `- Break: ${b.from}-${b.to} (${b.minutes} min)`));
+  schoolLines.push(school.lunch
+    ? `- Lunch break: ${school.lunch.from}-${school.lunch.to}, classes start again at ${school.resume.time}${room(school.resume.room)}`
+    : '- No lunch break between classes');
+  schoolLines.push(`- Classes finish at: ${school.finish}`);
+}
+
+const taskLines = [
+  ...dueTasks.slice(0, 8).map(t => `- ${clip(t.title, 100)} (${dueDay(t) === todayIso ? 'due today' : 'overdue'})`),
+  otherTasks.length ? `- plus ${otherTasks.length} other open task${otherTasks.length > 1 ? 's' : ''} with a later or no due date` : '',
+].filter(Boolean);
+
 const today = new Date().toLocaleDateString('en-GB', {
   weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: tz,
 });
@@ -63,7 +99,9 @@ const systemText = [
   'Do NOT use bullet points, asterisks, markdown, emojis, URLs, email addresses, or special characters meant for text displays.',
   'Say times the way a person would say them out loud.',
   `Stay strictly under ${maxChars} characters in total.`,
-  "Order: one short greeting, today's schedule, then emails that need attention (Gmail, then university), then a one-line sign-off.",
+  "Order: one short greeting, today's school day, other calendar events, tasks due today or overdue, then emails that need attention (Gmail, then university), then a one-line sign-off.",
+  'For the school day say when the first class starts and in which room, any breaks, when the lunch break is, when classes start again and when they finish. Use exactly the times and rooms given.',
+  'For tasks, name the ones due today or overdue; only mention the count of the others.',
   'For university emails, mention only the ones that look important or need action.',
   'If there are no events or no emails, say so in a few words.',
   'Never invent details that are not in the data.',
@@ -76,8 +114,14 @@ const systemText = [
 const userText = [
   `Today is ${today}.`,
   '',
+  `SCHOOL TIMETABLE TODAY (${school.classes?.length || 0} classes):`,
+  schoolLines.join('\n'),
+  '',
   `CALENDAR (${events.length} events):`,
   eventLines.length ? eventLines.join('\n') : '- none',
+  '',
+  `TO-DO LIST (${dueTasks.length} due today or overdue, ${tasks.length} open):`,
+  taskLines.length ? taskLines.join('\n') : '- none',
   '',
   `PRIORITY UNREAD EMAILS (${emails.length}):`,
   emailLines.length ? emailLines.join('\n') : '- none',
@@ -91,6 +135,8 @@ return [{
     eventCount: events.length,
     emailCount: emails.length,
     uniEmailCount: uniEmails.length,
+    classCount: school.classes?.length || 0,
+    dueTaskCount: dueTasks.length,
     geminiRequest: {
       systemInstruction: { parts: [{ text: systemText }] },
       contents: [{ role: 'user', parts: [{ text: userText }] }],

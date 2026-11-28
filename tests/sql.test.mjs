@@ -128,6 +128,53 @@ try {
   r = await loadStyle();
   ok(r.length === 1 && r[0].style === null && await countStyles() === styleNames.length, 'style deleted from styles/ → chats using it fall back to default');
 
+  // To-do list: instant task actions, kind-aware card texts, undo
+  const inst = (kind, pl, chat = '111') => q(sql('insert_instant.sql'), [chat, kind, pl, `📝 ${pl.title}`]).then(r => r.rows);
+  const t = (await inst('task_add', { title: 'Buy milk', due: '', notes: '' }))[0];
+  ok(t && t.kind === 'task_add' && t.payload.title === 'Buy milk', 'instant task_add logged, payload as jsonb');
+  ok((await c.query('select status, instant from assistant.proposals where id=$1', [t.id])).rows[0].instant === true, 'instant row marked instant + approved');
+  ok((await inst('calendar_event', { title: 'x' })).length === 0 && (await inst('task_delete', { title: 'x' })).length === 0, 'instant insert refuses every other kind');
+  r = (await q(sql('mark_executed.sql'), [String(t.id), { id: 'gt-1', title: 'Buy milk' }])).rows[0];
+  ok(r.editText.endsWith('✅ Added to your tasks.') && r.undoable === true && r.id, 'instant executed → undoable, task text');
+  const claimUndo = (id, chat = '111', client = c) => client.query(sql('claim_undo.sql'), [String(id), chat]).then(x => x.rows);
+  ok((await claimUndo(t.id, '222')).length === 0, 'undo from another chat → no rows');
+  r = await claimUndo(t.id);
+  ok(r.length === 1 && r[0].ok === true && r[0].status === 'undone' && r[0].result.id === 'gt-1', 'undo claimed, stored task id returned');
+  r = await claimUndo(t.id);
+  ok(r[0].ok === false && r[0].status === 'undone', 'second undo tap → refused');
+  r = (await q(sql('mark_undone.sql'), [String(t.id)])).rows[0];
+  ok(r.editText.endsWith('↩️ Undone.'), 'mark undone → card text');
+  const t2 = (await inst('task_done', { taskId: 'gt-2', title: 'Essay' }))[0];
+  r = (await q(sql('mark_executed.sql'), [String(t2.id), { id: 'gt-2', title: 'Essay (final)' }])).rows[0];
+  ok(r.editText.endsWith('✅ Done: Essay (final).'), 'task_done shows the real title Google returned');
+  await claimUndo(t2.id);
+  r = (await q(sql('mark_undo_failed.sql'), [String(t2.id), 'Tasks API 404'])).rows[0];
+  ok(r.editText.includes('Could not undo it: Tasks API 404') && (await c.query('select status from assistant.proposals where id=$1', [t2.id])).rows[0].status === 'executed', 'undo failed → back to executed, error shown');
+  await c.query("update assistant.proposals set decided_at = now() - interval '25 hours' where id=$1", [t2.id]);
+  ok((await claimUndo(t2.id))[0].ok === false, 'undo after 24 h → refused');
+  const card = await ins(); await claim(card.id, 'approve');
+  await q(sql('mark_executed.sql'), [String(card.id), {}]);
+  ok((await claimUndo(card.id))[0].ok === false, 'card (non-instant) actions cannot be undone');
+  const del = (await q(sql('insert_proposal.sql'), ['111', 'task_delete', { taskId: 'gt-3', title: 'Essay' }, '🗑 Delete task: Essay', 12])).rows[0];
+  await claim(del.id, 'approve');
+  r = (await q(sql('mark_failed.sql'), [String(del.id), 'the task title changed'])).rows[0];
+  ok(r.editText.includes('Could not delete it: the task title changed') && r.undoable === false, 'failed delete → kind-aware text, not undoable');
+  bad = false; try { await q(sql('insert_proposal.sql'), ['111', 'send_email', {}, 's', 12]); } catch { bad = true; }
+  ok(bad, 'unknown proposal kind rejected by the table');
+  bad = false; try { await c.query("insert into assistant.proposals (chat_id, kind, payload, summary, instant) values ('1', 'task_delete', '{}', 's', true)"); } catch { bad = true; }
+  ok(bad, 'instant is impossible for anything but task_add / task_done');
+
   console.log((await c.query('select id,status from assistant.decision_log')).rows.map(x => `${x.id}:${x.status}`).join(' '));
+
+  // Upgrade path: a volume created before tasks existed (old inline CHECKs) accepts the new kinds.
+  await c.query('DROP SCHEMA assistant CASCADE');
+  await c.query(`CREATE SCHEMA assistant; CREATE TABLE assistant.proposals (
+    id bigserial PRIMARY KEY, chat_id text NOT NULL,
+    kind text NOT NULL CHECK (kind IN ('calendar_event')), payload jsonb NOT NULL, summary text NOT NULL,
+    status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'declined', 'expired', 'executed', 'failed')),
+    created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL DEFAULT now() + interval '12 hours',
+    decided_at timestamptz, result jsonb)`);
+  await c.query(fs.readFileSync(path.join(P, 'docker/postgres/init/01-assistant.sql'), 'utf8'));
+  ok((await inst('task_add', { title: 'After upgrade' })).length === 1, 'old volume + re-applied 01-assistant.sql → task kinds accepted');
   await c.end();
 } finally { await db.stop(); }

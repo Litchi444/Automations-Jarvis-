@@ -56,6 +56,7 @@ def select_only(sql):
 READ_ONLY = {
     "n8n-nodes-base.googleCalendarTool": {"getAll", "get"},
     "n8n-nodes-base.gmailTool": {"getAll", "get"},
+    "n8n-nodes-base.googleTasksTool": {"getAll", "get"},
     "n8n-nodes-base.postgresTool": {"executeQuery"},  # + select_only() below
 }
 tools = [s for s, _, t in edges(asst, "ai_tool")]
@@ -70,34 +71,89 @@ write_like = [n["name"] for n in asst["nodes"]
               if n["type"].endswith("Tool") and n["name"] not in tools]
 report("no unconnected/extra tool nodes", not write_like, ", ".join(write_like))
 
-# 3. Writes to the outside world only exist behind the approval switch ---------
-WRITE_OPS = {"create", "update", "delete", "send", "reply", "addLabels", "removeLabels", "markAsRead", "markAsUnread"}
-writers = [n["name"] for n in asst["nodes"]
-           if n["type"] in ("n8n-nodes-base.googleCalendar", "n8n-nodes-base.gmail", "n8n-nodes-base.googleTasks")
-           and n["parameters"].get("operation") in WRITE_OPS]
-gated = {t for s, i, t in edges(asst) if s == "Approved?" and i == 0}
-ungated = [w for w in writers if w not in gated]
-report("writes only after 'Approved?' output 0", not ungated, ", ".join(ungated) or f"{len(writers)} write node(s) gated")
+# 3. Writes to the outside world only exist behind a gate ---------------------
+#    Card gate: "Approved?" output 0 (a human tap, claimed atomically). Instant gate:
+#    "Card or instant?" instant output (task add / done the user's own words asked for).
+#    Undo gate: "Undo?" output 0 (a human tap, claimed atomically).
+sys.path.insert(0, str(ROOT / "src"))
+import build_workflows  # noqa: E402  (module import has no side effects)
 
-# 4. Approval chain: Approved? is fed by the atomic claim ----------------------
-chain_ok = ("Claim decision", 0, "Decision outcome") in set(edges(asst)) and \
-           ("Decision outcome", 0, "Approved?") in set(edges(asst)) and \
+WRITE_OPS = {"create", "update", "delete", "send", "reply", "addLabels", "removeLabels", "markAsRead", "markAsUnread"}
+WRITER_TYPES = ("n8n-nodes-base.googleCalendar", "n8n-nodes-base.gmail", "n8n-nodes-base.googleTasks")
+writers = [n["name"] for n in asst["nodes"]
+           if n["type"] in WRITER_TYPES and n["parameters"].get("operation") in WRITE_OPS]
+GATES = {
+    "card": ("Approved?", build_workflows.OUTCOME["execute"]),
+    "instant": ("Card or instant?", build_workflows.MODE["instant"]),
+    "undo": ("Undo?", build_workflows.UNDO["run"]),
+}
+gate_edges = {(src, i) for src, i in GATES.values()}
+main = list(edges(asst))
+
+
+def reach(starts):
+    seen, todo = set(), list(starts)
+    while todo:
+        n = todo.pop()
+        if n in seen:
+            continue
+        seen.add(n)
+        todo += [t for s_, i, t in main if s_ == n and (s_, i) not in gate_edges]
+    return seen
+
+
+ungated = sorted(set(writers) & reach(["Telegram Trigger"]))
+report("writes only behind a gate (card/instant/undo)", bool(writers) and not ungated,
+       ", ".join(ungated) or f"{len(writers)} write node(s) gated")
+behind = {g: set(writers) & reach([t for s_, i, t in main if (s_, i) == GATES[g]]) for g in GATES}
+op = lambda w: (A[w]["type"].split(".")[-1], A[w]["parameters"].get("operation"))  # noqa: E731
+bad_instant = [w for w in behind["instant"] if op(w) not in {("googleTasks", "create"), ("googleTasks", "update")}]
+report("instant gate: only task add / status change", bool(behind["instant"]) and not bad_instant,
+       ", ".join(bad_instant) or ", ".join(sorted(behind["instant"])))
+bad_undo = [w for w in behind["undo"] if A[w]["type"] != "n8n-nodes-base.googleTasks"]
+report("undo gate: only Google Tasks", bool(behind["undo"]) and not bad_undo, ", ".join(bad_undo))
+inst_sql = A.get("Log instant action", {}).get("parameters", {}).get("query", "")
+inst_ok = ("Card or instant?", build_workflows.MODE["instant"], "Log instant action") in set(main) \
+    and "IN ('task_add', 'task_done')" in inst_sql and "instant" in inst_sql
+report("instant actions logged first, task kinds only", inst_ok)
+mode_src = A.get("One item per proposal", {}).get("parameters", {}).get("jsCode", "")
+report("instant mode only for task_add / task_done",
+       "INSTANT_KINDS = ['task_add', 'task_done']" in mode_src and "x.instant === true" in mode_src)
+
+# 4. Approval chain: Approved? is fed by the atomic claim; Undo? by the atomic undo claim --
+chain_ok = ("Claim decision", 0, "Decision outcome") in set(main) and \
+           ("Decision outcome", 0, "Approved?") in set(main) and \
            "UPDATE assistant.proposals" in A.get("Claim decision", {}).get("parameters", {}).get("query", "") and \
            "status = 'pending'" in A["Claim decision"]["parameters"]["query"]
 report("approval goes through atomic claim_decision", chain_ok)
+undo_q = A.get("Claim undo", {}).get("parameters", {}).get("query", "")
+undo_ok = ("Claim undo", 0, "Undo outcome") in set(main) and ("Undo outcome", 0, "Undo?") in set(main) \
+    and "status = 'executed' AND instant" in undo_q and "interval '24 hours'" in undo_q
+report("undo goes through atomic claim_undo (24 h, instant only)", undo_ok)
+delete_checked = all(any((g, 0, c) in set(main) for g, c in (("Get event", "Check event"), ("Get task", "Check task")))
+                     and w in reach(["Check event", "Check task"])
+                     for w in writers if A[w]["parameters"].get("operation") in ("delete", "update")
+                     and w in behind["card"])
+report("card move/done/delete re-check the target first", delete_checked)
 
 # 5. Write payload comes from the stored row, not the agent ---------------------
-create = [A[w] for w in writers if A[w]["parameters"].get("operation") == "create"]
 AGENT_REFS = ("$fromAI", "$('Jarvis')", "$('Parse + validate')", "$('Prepare agent input')")
-uses_stored = all("$json.payload." in json.dumps(c["parameters"])
-                  and not any(r in json.dumps(c["parameters"]) for r in AGENT_REFS) for c in create)
-report("created items use the STORED payload", bool(create) and uses_stored)
+not_stored = [w for w in writers
+              if not re.search(r"\$json\.(payload|result)\.", json.dumps(A[w]["parameters"]))
+              or any(r in json.dumps(A[w]["parameters"]) for r in AGENT_REFS)]
+report("writes use the STORED payload / result", bool(writers) and not not_stored, ", ".join(not_stored))
 
 # 6. No invitations / emails to third parties ----------------------------------
-inv = [c["name"] for c in create
+SEND_UPDATES = {"create": "additionalFields", "update": "updateFields", "delete": "options"}
+cal_writers = [A[w] for w in writers if A[w]["type"] == "n8n-nodes-base.googleCalendar"]
+inv = [c["name"] for c in cal_writers
        if c["parameters"].get("additionalFields", {}).get("attendees")
-       or c["parameters"].get("additionalFields", {}).get("sendUpdates") not in ("none",)]
-report("no attendees, sendUpdates=none", not inv, ", ".join(inv))
+       or c["parameters"].get("updateFields", {}).get("attendees")
+       or c["parameters"].get(SEND_UPDATES.get(c["parameters"]["operation"], ""), {}).get("sendUpdates") != "none"]
+report("no attendees, sendUpdates=none", bool(cal_writers) and not inv, ", ".join(inv))
+primary_only = [c["name"] for c in cal_writers + [A[n] for n in A if A[n]["type"] == "n8n-nodes-base.googleCalendar"]
+                if c["parameters"].get("calendar", {}).get("value") != "primary"]
+report("calendar writes on the primary calendar only", not primary_only, ", ".join(primary_only))
 gmail_writes = [n["name"] for wf in ALL for n in wf["nodes"]
                 if "gmail" in n["type"].lower() and n["parameters"].get("operation") in WRITE_OPS]
 report("no Gmail write operations anywhere", not gmail_writes, ", ".join(gmail_writes))
@@ -121,8 +177,6 @@ route_src = A.get("Route update", {}).get("parameters", {}).get("jsCode", "")
 report("second chat-id gate in 'Route update'", "TELEGRAM_CHAT_ID" in route_src and "return []" in route_src)
 
 # 9. Generated JSON in sync with the generator (full in-memory rebuild) ----------
-sys.path.insert(0, str(ROOT / "src"))
-import build_workflows  # noqa: E402  (module import has no side effects)
 stale = [f for f, w in build_workflows.build_all().items()
          if not (WF_DIR / f).exists()
          or (WF_DIR / f).read_text(encoding="utf-8").replace("\r\n", "\n") != w.to_json()]
