@@ -193,7 +193,7 @@ Telegram allows one webhook per bot. If you use *Listen for test event* in the e
 
 | Where | Field | Default |
 |---|---|---|
-| Speak → Config | `ttsModel`, `voiceName`, `ttsStyle` | `gemini-3.1-flash-tts-preview`, `Charon` (male; e.g. `Kore` for a female voice) |
+| Speak → Config | `ttsModel`, `voiceName`, `ttsStyle` | `gemini-3.1-flash-tts-preview`, `Enceladus` (male, low; e.g. `Kore` for a female voice) |
 | Briefing → Config | `textModel`, `language`, `maxChars` | `gemini-flash-lite-latest`, English, 700 |
 | `school_day.js` | `MIN_BREAK_MIN`, `LUNCH` window | 10 min, 11:30–14:00 |
 | Assistant → Config | `transcribeModel`, `proposalTtlHours` | `gemini-flash-lite-latest`, 12 |

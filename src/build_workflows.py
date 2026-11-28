@@ -180,7 +180,7 @@ def build_speak():
     w.node("Speech-safe text", "n8n-nodes-base.code", 2, [0, 300], code("speak_sanitize.js"))
     w.node("Config", "n8n-nodes-base.set", 3.4, [220, 300], set_node(
         assign("ttsModel", "gemini-3.1-flash-tts-preview"),
-        assign("voiceName", "Charon"),  # male prebuilt Gemini voice
+        assign("voiceName", "Enceladus"),  # male prebuilt Gemini voice (low, soft)
         assign("ttsStyle", "Read this in a calm, warm, natural voice"),
         assign("text", "={{ String($json.text || '').trim() }}"),
         assign("caption", "={{ String($json.caption || $json.text || '').slice(0, 1024) }}"),
