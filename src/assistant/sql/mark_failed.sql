@@ -8,6 +8,7 @@ RETURNING id, kind,
               WHEN 'event_delete' THEN 'delete it'
               WHEN 'task_done'    THEN 'mark it done'
               WHEN 'task_delete'  THEN 'delete it'
+              WHEN 'email_unsubscribe' THEN 'unsubscribe'
               ELSE 'add it'
           END || ': ' || left(coalesce($2::text, 'unknown error'), 200) AS "editText",
           'Failed' AS toast,

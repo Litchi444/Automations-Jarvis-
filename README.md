@@ -127,7 +127,7 @@ docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USE
 docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /docker-entrypoint-initdb.d/02-skills.sql'
 ```
 
-**Answer styles.** A style changes how Jarvis talks to you (tone, length, personality) on every reply and in the morning briefing, not just drafts. In the briefing it shapes tone and wording only: the length limit and spoken-text rules still apply. Styles live in `styles/<name>.md`, same format as skills (body up to 2000 characters, since it is added to every prompt; `off` is reserved). In Telegram: `/style` lists them and shows the current one, `/style butler` picks one, `/style off` goes back to the default. The command is handled by a plain workflow node; the agent can read the active style but never change it, and the style never overrides the safety or output rules, nor drafts written with a skill. After adding or editing a style, rebuild (regenerates `docker/postgres/init/03-styles.sql`), deploy, and load it (idempotent; deleting a style resets chats that used it to the default). On an existing volume, re-apply `01-assistant.sql` once first to create the `styles` and `chat_settings` tables:
+**Answer styles.** A style changes how Jarvis talks to you (tone, length, personality) on every reply and in the morning briefing, not just drafts. In the briefing it shapes tone and wording only: the length limit and spoken-text rules still apply. Styles live in `styles/<name>.md`, same format as skills (body up to 2000 characters, since it is added to every prompt; `off` is reserved). In Telegram: `/style` lists them and shows the current one, `/style butler` picks one, `/style off` goes back to the default, `jarvis` (the film butler: calm, dry wit, calls you "sir" / "Monsieur"). The command is handled by a plain workflow node; the agent can read the active style but never change it, and the style never overrides the safety or output rules, nor drafts written with a skill. After adding or editing a style, rebuild (regenerates `docker/postgres/init/03-styles.sql`), deploy, and load it (idempotent; deleting a style resets chats that used it to the default; the default name lives in `src/assistant/sql/load_style.sql` and `set_style.sql`). On an existing volume, re-apply `01-assistant.sql` once first to create the `styles` and `chat_settings` tables:
 
 ```bash
 docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /docker-entrypoint-initdb.d/03-styles.sql'
@@ -149,7 +149,7 @@ Approving suggestions needs **calendar write** scope. n8n's Google Calendar cred
 |---|---|---|
 | **Google Calendar OAuth2 API** | briefing, Jarvis tools (calendar + school), create / move / delete event | Client ID + Secret → *Sign in* |
 | **Google Tasks OAuth2 API** | briefing (*Get open tasks*), Jarvis *Tasks: list*, every task node | Client ID + Secret → *Sign in* |
-| **Gmail OAuth2 API** | briefing, Jarvis search/read tools | Client ID + Secret → *Sign in* |
+| **Gmail OAuth2 API** | briefing, Jarvis search/read tools, *Get email* (unsubscribe card) | Client ID + Secret → *Sign in* |
 | **Header Auth** ("Gemini API key") | Gemini HTTP nodes (TTS, script, transcription) | Name `x-goog-api-key`, Value = your key |
 | **Google Gemini (PaLM) API** | Jarvis chat model | Host `https://generativelanguage.googleapis.com`, API key |
 | **Postgres** | chat memory, proposals, university mail copy (+ Jarvis *Uni mail* tools, briefing) | Host `postgres`, DB/user/password from `.env`, port 5432, SSL off |
@@ -166,6 +166,14 @@ Approving suggestions needs **calendar write** scope. n8n's Google Calendar cred
 4. **To-do list:** nothing to set up beyond the *Google Tasks* credential. Jarvis uses your default list (*My Tasks*), visible in the Google Tasks app and next to Google Calendar.
 
 Existing database? Re-apply `01-assistant.sql` (command in §3): it widens the proposal kinds and adds the Undo status.
+
+### 5c. Unsubscribing from mailing lists (Gmail)
+
+Ask Jarvis "unsubscribe me from <sender>". It finds a recent email from that sender and sends a card (📭). Nothing happens until you tap ✅. Then the workflow re-fetches that email by its stored id, checks the sender is still the one on the card, and uses only the **one-click unsubscribe** the sender declares in its headers (RFC 8058: `List-Unsubscribe-Post: List-Unsubscribe=One-Click` + an https `List-Unsubscribe` link). It POSTs the standard one-click body to that link, without following redirects.
+
+- No one-click header → the card says so; use Gmail's own *Unsubscribe* button. `mailto:` unsubscribes are never used, since they would send an email.
+- The link must be https on port 443 with a public DNS name (no IP address, no `localhost`, `postgres`, `n8n` or other internal names), so a crafted email cannot make n8n call a service inside the stack.
+- Not undoable, never instant, Gmail only (the university mailbox stays untouched). Gmail write operations (labels, archive, delete, send) are still not used anywhere.
 
 ## 6. Import
 

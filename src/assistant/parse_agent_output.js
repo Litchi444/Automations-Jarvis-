@@ -51,6 +51,8 @@ const HAS_OFFSET = /(?:[zZ]|[+-]\d{2}:?\d{2})$/;
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const TASK_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const EVENT_ID = /^[A-Za-z0-9_-]{1,256}$/;
+const MESSAGE_ID = /^[A-Za-z0-9_-]{6,64}$/;   // Gmail message id (from "Gmail: search")
+const EMAIL = /^[^\s@<>"(),;:]{1,64}@[a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63})+$/;
 const fmtDay = d => d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: tz });
 const fmtTime = d => d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: tz });
 const localDate = ms => new Date(ms).toLocaleDateString('en-CA', { timeZone: tz }); // YYYY-MM-DD
@@ -171,6 +173,21 @@ function validate(p) {
         kind: p.type,
         payload: { taskId, title },
         summary: card([p.type === 'task_done' ? `☑️ Mark done: ${title}` : `🗑 Delete task: ${title}`, why]),
+      } };
+    }
+    case 'email_unsubscribe': {
+      // Always a card (never instant). On approval the email is re-fetched by this id, its
+      // sender must still be `from`, and only its RFC 8058 one-click header is used
+      // (unsubscribe_target.js). The agent never supplies the unsubscribe link.
+      const messageId = String(p.messageId || '').trim();
+      if (!MESSAGE_ID.test(messageId)) return { error: 'invalid message id' };
+      const rawFrom = String(p.from || '').trim();
+      const from = (rawFrom.match(/<([^<>]*)>\s*$/)?.[1] ?? rawFrom).trim().toLowerCase();
+      if (from.length > 254 || !EMAIL.test(from)) return { error: 'invalid sender address' };
+      return { value: {
+        kind: 'email_unsubscribe',
+        payload: { messageId, from, title },
+        summary: card([`📭 Unsubscribe: ${title}`, `✉️ ${from}`, why]),
       } };
     }
     default:

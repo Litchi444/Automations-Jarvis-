@@ -135,6 +135,20 @@ delete_checked = all(any((g, 0, c) in set(main) for g, c in (("Get event", "Chec
                      for w in writers if A[w]["parameters"].get("operation") in ("delete", "update")
                      and w in behind["card"])
 report("card move/done/delete re-check the target first", delete_checked)
+# One-click unsubscribe: an HTTP POST to a link taken from an email, so it must sit behind the
+# card gate, after the stored-id fetch + check, with a fixed body and no redirects.
+UN, un = "One-click unsubscribe", A.get("One-click unsubscribe", {}).get("parameters", {})
+un_src = A.get("Check unsubscribe", {}).get("parameters", {}).get("jsCode", "")
+un_ok = bool(un) and UN not in reach(["Telegram Trigger"]) \
+    and UN in reach([t for s_, i, t in main if (s_, i) == GATES["card"]]) \
+    and [(s_, i) for s_, i, t in main if t == UN] == [("Check unsubscribe", 0)] \
+    and ("Get email", 0, "Check unsubscribe") in set(main) \
+    and A["Get email"]["parameters"].get("messageId") == "={{ $json.payload.messageId }}" \
+    and un.get("url") == "={{ $json.url }}" \
+    and un.get("options", {}).get("redirect", {}).get("redirect", {}).get("followRedirects") is False \
+    and un.get("bodyParameters") == {"parameters": [{"name": "List-Unsubscribe", "value": "One-Click"}]} \
+    and "list-unsubscribe=one-click" in un_src and "HTTPS_URL.exec(s)" in un_src
+report("unsubscribe: card only, stored id re-checked, one-click https, no redirects", un_ok)
 
 # 5. Write payload comes from the stored row, not the agent ---------------------
 AGENT_REFS = ("$fromAI", "$('Jarvis')", "$('Parse + validate')", "$('Prepare agent input')")

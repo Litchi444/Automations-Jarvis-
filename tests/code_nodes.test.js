@@ -134,6 +134,18 @@ o = parse(JSON.stringify({ reply: 'x', proposals: [
   { type: 'task_add', title: '  ' },
 ] }), ctxAsk('add to my todo'));
 ok(o.proposals.length === 0 && o.rejectedProposals.length === 8, `8 bad task/event proposals rejected (${o.rejectedProposals.join(' | ')})`);
+o = one({ type: 'email_unsubscribe', messageId: '18c9f0a1b2c3d4e5', from: 'Zalando <News@Zalando.FR>', title: 'Zalando', reason: 'promo' },
+  'unsubscribe me from Zalando, add it to my to-do list');
+ok(o.proposals.length === 1 && o.proposals[0].instant === false && o.proposals[0].payload.from === 'news@zalando.fr'
+  && o.proposals[0].payload.messageId === '18c9f0a1b2c3d4e5' && /📭 Unsubscribe: Zalando\n✉️ news@zalando.fr/.test(o.proposals[0].summary),
+'email_unsubscribe → always a card, sender address normalised');
+o = parse(JSON.stringify({ reply: 'x', proposals: [
+  { type: 'email_unsubscribe', messageId: '../x', from: 'a@b.fr', title: 'x' },
+  { type: 'email_unsubscribe', messageId: '18c9f0a1b2c3', from: 'not an address', title: 'x' },
+  { type: 'email_unsubscribe', messageId: '18c9f0a1b2c3', from: 'a@localhost', title: 'x' },
+  { type: 'email_unsubscribe', messageId: '18c9f0a1b2c3', from: 'a@b.fr', title: ' ' },
+] }), ctxAsk('unsubscribe me'));
+ok(o.proposals.length === 0 && o.rejectedProposals.length === 4, `4 bad unsubscribe proposals rejected (${o.rejectedProposals.join(' | ')})`);
 
 console.log('proposals_to_items');
 o = run('assistant/proposals_to_items.js', { 'Parse + validate': [{ chatId: '111', proposals: [{ kind: 'calendar_event', payload: { a: 1 }, summary: 's' }, { kind: 'calendar_event', payload: {}, summary: 't' }] }] });
@@ -166,6 +178,27 @@ ok(V('event_move', { eventId: 'e1', title: 'Dentist', oldStart: evP.start }, { i
 ok(V('task_delete', { taskId: 't1', title: 'Essay' }, { id: 't1', title: 'Essay' }).length === 1, 'task still matches → ok');
 ok(throws(() => V('task_done', { taskId: 't1', title: 'Essay' }, { id: 't1', title: 'Shopping' })), 'task title differs → refused');
 ok(throws(() => V('task_delete', { taskId: 't1', title: 'Essay' }, {})) && throws(() => V('calendar_event', {}, { id: 'x' })), 'missing item / unexpected kind → refused');
+
+console.log('unsubscribe_target');
+const uP = { messageId: 'm1', from: 'news@shop.fr', title: 'Shop' };
+const mail = (h, extra = {}) => ({ id: 'm1', from: { value: [{ address: 'News@Shop.fr', name: 'Shop' }] }, headers: h, ...extra });
+const oneClick = list => ({ 'list-unsubscribe': `List-Unsubscribe: ${list}`, 'list-unsubscribe-post': 'List-Unsubscribe-Post: List-Unsubscribe=One-Click' });
+const US = (got, kind = 'email_unsubscribe', payload = uP) => run('assistant/unsubscribe_target.js', { 'Decision outcome': [{ kind, payload }] }, got);
+const uErr = got => { try { US(got); return ''; } catch (e) { return e.message; } };
+o = US(mail(oneClick('<mailto:u@shop.fr?subject=stop>, <https://mail.shop.fr/u?t=abc>')))[0].json;
+ok(o.url === 'https://mail.shop.fr/u?t=abc' && o.host === 'mail.shop.fr' && o.payload.messageId === 'm1', 'one-click header → https link from the header, mailto skipped');
+ok(US(mail({ 'List-Unsubscribe': '<https://x.shop.fr/u>', 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' }))[0].json.url === 'https://x.shop.fr/u', 'bare header values, any key case → ok');
+ok(/no one-click/.test(uErr(mail({ 'list-unsubscribe': 'List-Unsubscribe: <https://mail.shop.fr/u>' }))), 'no List-Unsubscribe-Post → refused');
+ok(/no one-click/.test(uErr(mail(oneClick('<mailto:u@shop.fr>')))), 'mailto only → refused (never sends an email)');
+ok(/no one-click/.test(uErr(mail(oneClick('<http://mail.shop.fr/u>')))), 'plain http → refused');
+for (const bad of ['https://127.0.0.1/u', 'https://0x7f.1/u', 'https://2130706433/u', 'https://[::1]/u', 'https://postgres/u',
+  'https://n8n:5678/u', 'https://shop.fr:8443/u', 'https://user:pw@shop.fr/u', 'https://foo.localhost/u', 'https://box.internal/u', 'https://10.0.0.1/u',
+  'https://0x7f.0x1/u', 'https://%31.shop.fr/u', 'https://evil.fr\\@postgres/u', 'https://shop.fr./u']) {
+  ok(/unsafe/.test(uErr(mail(oneClick(`<${bad}>`)))), `unsafe link refused: ${bad}`);
+}
+ok(/sender changed/.test(uErr(mail(oneClick('<https://mail.shop.fr/u>'), { from: { value: [{ address: 'evil@other.fr' }] } }))), 'other sender → refused');
+ok(/no longer exists/.test(uErr({})) && /no longer exists/.test(uErr(mail(oneClick('<https://a.shop.fr/u>'), { id: 'm2' }))), 'missing / other message → refused');
+ok(throws(() => US(mail(oneClick('<https://a.shop.fr/u>')), 'task_delete')), 'unexpected kind → refused');
 
 console.log('undo_outcome');
 const U = row => run('assistant/undo_outcome.js', { 'Route update': [{ proposalId: '9' }] }, row)[0].json;

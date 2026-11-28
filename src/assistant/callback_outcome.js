@@ -9,6 +9,7 @@ const OUTCOME = { execute: 0, cardOnly: 1 };
 const WORKING = {
   calendar_event: 'Adding…', event_move: 'Moving…', event_delete: 'Deleting…',
   task_add: 'Adding…', task_done: 'Marking done…', task_delete: 'Deleting…',
+  email_unsubscribe: 'Unsubscribing…',
 };
 
 const r = $('Route update').first().json;

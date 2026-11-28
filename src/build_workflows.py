@@ -48,7 +48,8 @@ UNDO = {"run": 0, "cardOnly": 1}                 # "Undo outcome" -> "Undo?" (0 
 # Proposal kind -> Switch output that picks the writer. The Switch expression is generated
 # from these maps, so there is no JS copy to drift.
 ACTION = {"calendar_event": 0, "event_move": 1, "event_delete": 1,
-          "task_add": 2, "task_done": 3, "task_delete": 3}   # "Which action?"
+          "task_add": 2, "task_done": 3, "task_delete": 3,
+          "email_unsubscribe": 4}                            # "Which action?"
 EVENT_CHANGE = {"event_move": 0, "event_delete": 1}           # "Event change"
 TASK_CHANGE = {"task_done": 0, "task_delete": 1}              # "Task change"
 TASK_OP = {"task_add": 0, "task_done": 1}                     # "Instant task op", "Undo which?"
@@ -593,6 +594,22 @@ def build_assistant():
     w.node("Delete task", "n8n-nodes-base.googleTasks", 1, [1700, 1080], {
         "task": TASKLIST, "operation": "delete", "taskId": "={{ $json.payload.taskId }}",
     }, onError="continueErrorOutput")
+    # Unsubscribe: fetch the email by its stored id, check the sender and take the RFC 8058
+    # one-click link from its headers (never from the body or the agent), then POST the fixed
+    # one-click body. No redirects followed. mailto unsubscribes are never used (no email sending).
+    w.node("Get email", "n8n-nodes-base.gmail", 2.1, [1480, 1140], {
+        "resource": "message", "operation": "get",
+        "messageId": "={{ $json.payload.messageId }}", "simple": False, "options": {},
+    }, onError="continueErrorOutput")
+    w.node("Check unsubscribe", "n8n-nodes-base.code", 2, [1590, 1140], code("assistant/unsubscribe_target.js"),
+           onError="continueErrorOutput")
+    w.node("One-click unsubscribe", "n8n-nodes-base.httpRequest", 4.2, [1700, 1140], {
+        "method": "POST", "url": "={{ $json.url }}",
+        "sendBody": True, "contentType": "form-urlencoded",
+        "bodyParameters": {"parameters": [{"name": "List-Unsubscribe", "value": "One-Click"}]},
+        "options": {"redirect": {"redirect": {"followRedirects": False}}, "timeout": 15000,
+                    "response": {"response": {"responseFormat": "text"}}},
+    }, onError="continueErrorOutput")
     w.node("Mark executed", "n8n-nodes-base.postgres", 2.6, [1900, 720], pg_query(
         "assistant/sql/mark_executed.sql",
         f"={{{{ [ {route}.proposalId, {{ id: $json.id, title: $json.title || $json.summary, link: $json.htmlLink }} ] }}}}"))
@@ -675,7 +692,9 @@ def build_assistant():
     w.link("Which action?", "Get event", ACTION["event_move"])
     w.link("Which action?", "Add task", ACTION["task_add"])
     w.link("Which action?", "Get task", ACTION["task_done"])
-    for get, check, change in (("Get event", "Check event", "Event change"), ("Get task", "Check task", "Task change")):
+    w.link("Which action?", "Get email", ACTION["email_unsubscribe"])
+    for get, check, change in (("Get event", "Check event", "Event change"), ("Get task", "Check task", "Task change"),
+                               ("Get email", "Check unsubscribe", "One-click unsubscribe")):
         w.link(get, check, 0)
         w.link(get, "Mark failed", 1)
         w.link(check, change, 0)
@@ -685,7 +704,7 @@ def build_assistant():
     w.link("Task change", "Complete task", TASK_CHANGE["task_done"])
     w.link("Task change", "Delete task", TASK_CHANGE["task_delete"])
     for n in ("Create calendar event", "Move calendar event", "Delete calendar event",
-              "Add task", "Complete task", "Delete task"):
+              "Add task", "Complete task", "Delete task", "One-click unsubscribe"):
         w.link(n, "Mark executed", 0)
         w.link(n, "Mark failed", 1)
 

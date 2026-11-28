@@ -139,7 +139,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "-- \"Load style\" (assistant) and \"Get style\" (morning briefing): the answer style chosen\n-- with /style for this chat. $1 chat id.\n-- Always returns exactly one row; style and body are NULL when none is chosen.\nSELECT s.name AS style, s.body\n  FROM (SELECT 1) AS one\n  LEFT JOIN assistant.chat_settings c ON c.chat_id = $1::text\n  LEFT JOIN assistant.styles s ON s.name = c.style;\n",
+        "query": "-- \"Load style\" (assistant) and \"Get style\" (morning briefing): the answer style chosen\n-- with /style for this chat, or the default style 'jarvis' when none is chosen\n-- (no row, or /style off). Keep the default name in sync with set_style.sql.\n-- $1 chat id. Always returns exactly one row; style and body are NULL only when the\n-- chosen style and the default are both missing from assistant.styles.\nSELECT s.name AS style, s.body\n  FROM (SELECT 1) AS one\n  LEFT JOIN assistant.chat_settings c ON c.chat_id = $1::text\n  LEFT JOIN assistant.styles s ON s.name = COALESCE(c.style, 'jarvis');\n",
         "options": {
           "queryReplacement": "={{ [ String($env.TELEGRAM_CHAT_ID || '') ] }}"
         }

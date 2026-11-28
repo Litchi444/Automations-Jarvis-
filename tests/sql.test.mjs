@@ -107,26 +107,26 @@ try {
   const setStyle = (arg, chat = '111') => q(sql('set_style.sql'), [chat, arg]).then(r => r.rows);
   const loadStyle = (chat = '111') => q(sql('load_style.sql'), [chat]).then(r => r.rows);
   r = await loadStyle();
-  ok(r.length === 1 && r[0].style === null && r[0].body === null, 'load: no setting yet → one row, default (nulls)');
+  ok(r.length === 1 && r[0].style === 'jarvis' && r[0].body.length > 0, 'load: no setting yet → one row, default style jarvis');
   r = await setStyle('');
-  ok(r.length === 1 && r[0].reply.includes('Current style: default') && styleNames.every(n => r[0].reply.includes(n)), '/style → lists every style + current');
+  ok(r.length === 1 && r[0].reply.includes('Current style: default') && r[0].reply.includes('• jarvis (default): ') && styleNames.every(n => r[0].reply.includes(n)), '/style → lists every style + current');
   const pick = styleNames[0];
   r = await setStyle(`  ${pick.toUpperCase()} `);
   ok(r.length === 1 && r[0].reply.startsWith(`Style set: ${pick}.`), '/style <name> → set (trimmed, case-insensitive)');
   r = await loadStyle();
   ok(r.length === 1 && r[0].style === pick && r[0].body.length > 0, 'load: returns the chosen style body');
-  ok((await loadStyle('222'))[0].style === null, 'load: other chat unaffected');
+  ok((await loadStyle('222'))[0].style === 'jarvis', 'load: other chat unaffected');
   r = await setStyle("nope' or '1'='1");
   ok(r[0].reply.startsWith('Unknown style') && (await loadStyle())[0].style === pick, 'unknown / injected name → refused, setting unchanged');
   r = await setStyle('off');
-  ok(r[0].reply === 'Style reset to the default.' && (await loadStyle())[0].style === null, '/style off → back to default');
+  ok(r[0].reply === 'Style reset to the default.' && (await loadStyle())[0].style === 'jarvis', '/style off → back to default (jarvis)');
   r = await setStyle('off');
   ok(r[0].reply === 'Style reset to the default.', '/style off twice → still fine');
   await c.query("insert into assistant.styles (name, description, body) values ('zz-gone', 'temp', 'Temp body')");
   await setStyle('zz-gone');
   await c.query(stylesSql);
   r = await loadStyle();
-  ok(r.length === 1 && r[0].style === null && await countStyles() === styleNames.length, 'style deleted from styles/ → chats using it fall back to default');
+  ok(r.length === 1 && r[0].style === 'jarvis' && await countStyles() === styleNames.length, 'style deleted from styles/ → chats using it fall back to default');
 
   // To-do list: instant task actions, kind-aware card texts, undo
   const inst = (kind, pl, chat = '111') => q(sql('insert_instant.sql'), [chat, kind, pl, `📝 ${pl.title}`]).then(r => r.rows);
@@ -159,6 +159,14 @@ try {
   await claim(del.id, 'approve');
   r = (await q(sql('mark_failed.sql'), [String(del.id), 'the task title changed'])).rows[0];
   ok(r.editText.includes('Could not delete it: the task title changed') && r.undoable === false, 'failed delete → kind-aware text, not undoable');
+  const unsub = async () => (await q(sql('insert_proposal.sql'), ['111', 'email_unsubscribe', { messageId: 'm1', from: 'news@shop.fr', title: 'Shop' }, '📭 Unsubscribe: Shop', 12])).rows[0];
+  const u1 = await unsub(); await claim(u1.id, 'approve');
+  r = (await q(sql('mark_executed.sql'), [String(u1.id), {}])).rows[0];
+  ok(r.editText.includes('📭 Unsubscribe request sent') && r.toast === 'Unsubscribed' && r.undoable === false, 'unsubscribe executed → card text, not undoable');
+  const u2 = await unsub(); await claim(u2.id, 'approve');
+  r = (await q(sql('mark_failed.sql'), [String(u2.id), 'no one-click unsubscribe'])).rows[0];
+  ok(r.editText.includes('Could not unsubscribe: no one-click unsubscribe'), 'unsubscribe failed → kind-aware text');
+  ok((await inst('email_unsubscribe', { messageId: 'm1' })).length === 0, 'unsubscribe can never be instant');
   bad = false; try { await q(sql('insert_proposal.sql'), ['111', 'send_email', {}, 's', 12]); } catch { bad = true; }
   ok(bad, 'unknown proposal kind rejected by the table');
   bad = false; try { await c.query("insert into assistant.proposals (chat_id, kind, payload, summary, instant) values ('1', 'task_delete', '{}', 's', true)"); } catch { bad = true; }

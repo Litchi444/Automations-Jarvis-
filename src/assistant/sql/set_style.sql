@@ -25,7 +25,9 @@ SELECT CASE
            CASE WHEN (SELECT name FROM arg) <> ''
                 THEN 'Unknown style "' || left((SELECT name FROM arg), 64) || E'".\n\n' ELSE '' END
            || 'Current style: ' || COALESCE((SELECT style FROM cur), 'default') || E'\n\n'
-           || COALESCE((SELECT string_agg('• ' || name || ': ' || description, E'\n' ORDER BY name)
+           -- 'jarvis' is the default style (see load_style.sql).
+           || COALESCE((SELECT string_agg('• ' || name || CASE WHEN name = 'jarvis' THEN ' (default)' ELSE '' END
+                                          || ': ' || description, E'\n' ORDER BY name)
                           FROM assistant.styles), 'No styles installed.')
            || E'\n\nSend /style <name> to choose one, /style off for the default.'
        END AS reply;

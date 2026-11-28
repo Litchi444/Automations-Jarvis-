@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS assistant.proposals (
 ALTER TABLE assistant.proposals ADD COLUMN IF NOT EXISTS instant boolean NOT NULL DEFAULT false;
 ALTER TABLE assistant.proposals DROP CONSTRAINT IF EXISTS proposals_kind_check;
 ALTER TABLE assistant.proposals ADD CONSTRAINT proposals_kind_check CHECK (kind IN
-    ('calendar_event', 'event_move', 'event_delete', 'task_add', 'task_done', 'task_delete'));
+    ('calendar_event', 'event_move', 'event_delete', 'task_add', 'task_done', 'task_delete',
+     'email_unsubscribe'));
 ALTER TABLE assistant.proposals DROP CONSTRAINT IF EXISTS proposals_status_check;
 ALTER TABLE assistant.proposals ADD CONSTRAINT proposals_status_check CHECK (status IN
     ('pending', 'approved', 'declined', 'expired', 'executed', 'failed', 'undone'));

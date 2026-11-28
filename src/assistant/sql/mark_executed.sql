@@ -1,4 +1,4 @@
--- $1 = proposal id, $2 = result ({ id, title, link } from Google; empty after a delete)
+-- $1 = proposal id, $2 = result ({ id, title, link } from Google; empty after a delete or an unsubscribe)
 UPDATE assistant.proposals
    SET status = 'executed', result = $2::jsonb
  WHERE id = $1::bigint AND status = 'approved'
@@ -10,6 +10,7 @@ RETURNING id, kind,
               WHEN 'task_add'       THEN '✅ Added to your tasks.'
               WHEN 'task_done'      THEN '✅ Done: ' || coalesce(nullif($2::jsonb->>'title', ''), payload->>'title') || '.'
               WHEN 'task_delete'    THEN '🗑 Task deleted.'
+              WHEN 'email_unsubscribe' THEN '📭 Unsubscribe request sent. Their emails may take a few days to stop.'
           END AS "editText",
           CASE kind
               WHEN 'calendar_event' THEN 'Added to your calendar'
@@ -18,5 +19,6 @@ RETURNING id, kind,
               WHEN 'task_add'       THEN 'Added to your tasks'
               WHEN 'task_done'      THEN 'Marked done'
               WHEN 'task_delete'    THEN 'Task deleted'
+              WHEN 'email_unsubscribe' THEN 'Unsubscribed'
           END AS toast,
           instant AS undoable;
