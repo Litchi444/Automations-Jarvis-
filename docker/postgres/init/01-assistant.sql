@@ -80,6 +80,14 @@ CREATE TABLE IF NOT EXISTS assistant.chat_settings (
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
 
+-- Agent chat memory. n8n's "Chat memory" node creates this same table on its first run;
+-- created here too so "Trim chat memory" never runs against a missing table.
+CREATE TABLE IF NOT EXISTS public.assistant_chat_history (
+    id          SERIAL       PRIMARY KEY,
+    session_id  VARCHAR(255) NOT NULL,
+    message     JSONB        NOT NULL
+);
+
 -- Handy audit view: what did I approve / decline lately?
 CREATE OR REPLACE VIEW assistant.decision_log AS
 SELECT id, kind, status, summary, created_at, decided_at, result, instant

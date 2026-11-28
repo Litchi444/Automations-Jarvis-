@@ -180,6 +180,24 @@
     {
       "parameters": {
         "operation": "executeQuery",
+        "query": "-- \"Trim chat memory\" (assistant), runs before the agent. $1 memory session key, $2 rows the\n-- \"Chat memory\" node loads (2 × contextWindowLength).\n-- The memory node loads the last $2 rows as they are. When that cut lands inside a tool\n-- exchange, the history opens with a tool call or a tool result, and Gemini refuses the\n-- request (400 \"function call turn comes immediately after a user turn ...\"), so Jarvis\n-- stops answering. Deleting the rows before the oldest user message of that window makes\n-- the loaded history always open with a user turn. Only rows the agent can no longer see\n-- are deleted. Always returns exactly one row.\nWITH recent AS (\n  SELECT id, message->>'type' AS type\n    FROM public.assistant_chat_history\n   WHERE session_id = $1::text\n   ORDER BY id DESC\n   LIMIT $2::int\n), cut AS (\n  -- No user message in the window at all: drop the whole window too.\n  SELECT coalesce(min(id) FILTER (WHERE type = 'human'), max(id) + 1) AS id FROM recent\n), gone AS (\n  DELETE FROM public.assistant_chat_history h\n   USING cut\n   WHERE h.session_id = $1::text AND h.id < cut.id\n  RETURNING 1\n)\nSELECT count(*)::int AS trimmed FROM gone;\n",
+        "options": {
+          "queryReplacement": "={{ [ 'telegram-' + $('Route update').first().json.chatId, 24 ] }}"
+        }
+      },
+      "id": "b7410545-b776-5936-858f-0c51a361de0c",
+      "name": "Trim chat memory",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1400,
+        400
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
         "query": "-- \"Load style\" (assistant) and \"Get style\" (morning briefing): the answer style chosen\n-- with /style for this chat. $1 chat id.\n-- Always returns exactly one row; style and body are NULL when none is chosen.\nSELECT s.name AS style, s.body\n  FROM (SELECT 1) AS one\n  LEFT JOIN assistant.chat_settings c ON c.chat_id = $1::text\n  LEFT JOIN assistant.styles s ON s.name = c.style;\n",
         "options": {
           "queryReplacement": "={{ [ $('Route update').first().json.chatId ] }}"
@@ -1316,7 +1334,7 @@
             "index": 0
           },
           {
-            "node": "Load style",
+            "node": "Trim chat memory",
             "type": "main",
             "index": 0
           }
@@ -1378,6 +1396,17 @@
       ]
     },
     "Gemini: transcribe": {
+      "main": [
+        [
+          {
+            "node": "Trim chat memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trim chat memory": {
       "main": [
         [
           {

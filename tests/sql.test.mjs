@@ -176,5 +176,24 @@ try {
     decided_at timestamptz, result jsonb)`);
   await c.query(fs.readFileSync(path.join(P, 'docker/postgres/init/01-assistant.sql'), 'utf8'));
   ok((await inst('task_add', { title: 'After upgrade' })).length === 1, 'old volume + re-applied 01-assistant.sql → task kinds accepted');
+
+  // Chat memory trim: the loaded window (last N rows) must open on a user turn.
+  const msg = (s, type) => q('insert into public.assistant_chat_history (session_id, message) values ($1, $2)', [s, { type, data: { content: type } }]);
+  const types = async s => (await c.query('select message->>\'type\' t from public.assistant_chat_history where session_id = $1 order by id', [s])).rows.map(x => x.t);
+  const trim = (s, n) => q(sql('trim_chat_memory.sql'), [s, n]).then(r => r.rows);
+  r = await trim('telegram-1', 6);
+  ok(r.length === 1 && r[0].trimmed === 0, 'trim: empty history → one row, nothing deleted');
+  // human, ai(tool call), tool, ai | human, ai(tool call), tool, ai | human, ai
+  for (const t of ['human', 'ai', 'tool', 'ai', 'human', 'ai', 'tool', 'ai', 'human', 'ai']) { await msg('telegram-1', t); }
+  await msg('telegram-2', 'ai');
+  r = await trim('telegram-1', 8);   // window would open on "tool"
+  ok(r[0].trimmed === 4 && (await types('telegram-1')).join() === 'human,ai,tool,ai,human,ai', 'trim: window cut inside a tool exchange → history starts at the oldest user turn in it');
+  r = await trim('telegram-1', 24);
+  ok(r[0].trimmed === 0 && (await types('telegram-1')).length === 6, 'trim: window already opens on a user turn → nothing deleted');
+  ok((await types('telegram-2')).join() === 'ai', 'trim: other sessions untouched');
+  r = await trim('telegram-2', 24);
+  ok(r[0].trimmed === 1 && (await types('telegram-2')).length === 0, 'trim: no user turn in the window → window dropped');
+  r = await trim("x' or '1'='1", 24);
+  ok(r[0].trimmed === 0 && (await types('telegram-1')).length === 6, 'trim: injected session key → nothing deleted');
   await c.end();
 } finally { await db.stop(); }

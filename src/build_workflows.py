@@ -335,6 +335,7 @@ def task_update_params(status):
 def build_assistant():
     w = WF(ASSISTANT_ID, "Assistant (Jarvis): Telegram voice/text agent with approval cards")
     route = "$('Route update').first().json"
+    MEMORY_TURNS = 12  # chat memory window, in user/assistant pairs (loads 2x this many rows)
     cfg = "$('Config').first().json"
 
     # ── Entry ───────────────────────────────────────────────
@@ -381,6 +382,12 @@ def build_assistant():
     }, retryOnFail=True, maxTries=2, waitBetweenTries=3000)
 
     # ── Agent ───────────────────────────────────────────────
+    # Keeps the loaded memory window opening on a user turn (see trim_chat_memory.sql).
+    # Session key must match prepare_agent_input.js. A failure never blocks the assistant.
+    w.node("Trim chat memory", "n8n-nodes-base.postgres", 2.6, [1400, 400], pg_query(
+        "assistant/sql/trim_chat_memory.sql",
+        f"={{{{ [ 'telegram-' + {route}.chatId, {2 * MEMORY_TURNS} ] }}}}"),
+        onError="continueRegularOutput")
     # Answer style chosen with /style. Always one row; a failed lookup falls back to the default.
     w.node("Load style", "n8n-nodes-base.postgres", 2.6, [1600, 400], pg_query(
         "assistant/sql/load_style.sql", f"={{{{ [ {route}.chatId ] }}}}"),
@@ -399,7 +406,7 @@ def build_assistant():
         "sessionIdType": "customKey",
         "sessionKey": "={{ $('Prepare agent input').first().json.sessionKey }}",
         "tableName": "assistant_chat_history",
-        "contextWindowLength": 12})
+        "contextWindowLength": MEMORY_TURNS})
     w.node("Calendar: list events", "n8n-nodes-base.googleCalendarTool", 1.3, [2040, 640], {
         "descriptionType": "manual",
         "toolDescription": ("Read-only. Lists events in the user's primary Google Calendar between "
@@ -631,12 +638,12 @@ def build_assistant():
     w.link("Route", "Show typing", ROUTE["voice"])
     w.link("Route", "Get voice file path", ROUTE["voice"])
     w.link("Route", "Show typing", ROUTE["text"])
-    w.link("Route", "Load style", ROUTE["text"])
+    w.link("Route", "Trim chat memory", ROUTE["text"])
     w.link("Route", "Claim decision", ROUTE["callback"])
     w.link("Route", "Set style", ROUTE["style"])
     w.link("Route", "Claim undo", ROUTE["undo"])
-    w.chain("Get voice file path", "Download voice", "Audio to base64", "Gemini: transcribe", "Load style")
-    w.chain("Load style", "Prepare agent input", "Jarvis", "Parse + validate")
+    w.chain("Get voice file path", "Download voice", "Audio to base64", "Gemini: transcribe", "Trim chat memory")
+    w.chain("Trim chat memory", "Load style", "Prepare agent input", "Jarvis", "Parse + validate")
     w.link("Set style", "Send style reply")
     w.link("Gemini chat model", "Jarvis", kind="ai_languageModel")
     w.link("Chat memory", "Jarvis", kind="ai_memory")
