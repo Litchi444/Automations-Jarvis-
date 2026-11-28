@@ -50,7 +50,11 @@ o = run(PA, { 'Route update': [{ kind: 'voice', chatId: '111' }], 'Gemini: trans
 ok(o[0].json.userText.startsWith("Qu'est-ce") && o[0].json.inputMode === 'voice' && o[0].json.sessionKey === 'telegram-111', 'voice transcript → userText, session key');
 ok(o[0].json.style === '' && o[0].json.styleBody === '', 'no style chosen → empty style');
 o = run(PA, { 'Route update': [{ kind: 'voice', chatId: '111' }], 'Gemini: transcribe': [{ candidates: [] }] }, noStyle);
-ok(/inaudible/.test(o[0].json.userText), 'empty transcript → inaudible marker');
+ok(/inaudible/.test(o[0].json.userText) && /ask them, in French, to repeat/.test(o[0].json.userText), 'empty transcript → ask to repeat');
+o = run(PA, { 'Route update': [{ kind: 'voice', chatId: '111' }], 'Gemini: transcribe': [{ candidates: [{ content: { parts: [{ text: ' [UNCLEAR]\n' }] } }] }] }, noStyle);
+ok(/could not be understood/.test(o[0].json.userText) && /propose nothing/.test(o[0].json.userText), 'UNCLEAR (unsure / not French or English) → ask to repeat, no guessing');
+o = run(PA, { 'Route update': [{ kind: 'voice', chatId: '111' }], 'Gemini: transcribe': [{ candidates: [{ content: { parts: [{ text: 'Unclear what to do today' }] } }] }] }, noStyle);
+ok(o[0].json.userText === 'Unclear what to do today', 'the word "unclear" inside a real sentence is kept');
 o = run(PA, { 'Route update': [{ kind: 'text', chatId: '111', text: 'hi' }] }, noStyle);
 ok(o[0].json.userText === 'hi' && o[0].json.inputMode === 'text', 'text passes through (transcribe node not touched)');
 o = run(PA, { 'Route update': [{ kind: 'text', chatId: '111', text: 'hi' }] }, { style: 'butler', body: '  Be formal.  ' + 'x'.repeat(3000) });

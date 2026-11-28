@@ -22,6 +22,15 @@ ASSISTANT_ID = "mbAssistant00001"
 UNIMAIL_ID = "mbUniMailIngest1"
 
 FILES_DIR = "/home/node/.n8n-files"
+# Jarvis only understands French and English. Anything else, or audio it is not sure
+# about, comes back as UNCLEAR_MARK and prepare_agent_input.js asks the user to repeat.
+UNCLEAR_MARK = "[UNCLEAR]"
+TRANSCRIBE_PROMPT = (
+    "The speaker talks French or English. Transcribe the voice message verbatim, in the "
+    "language spoken. Never translate. Output only the transcript. If the audio is silent, "
+    "inaudible, in another language, or you are not confident what was said, output exactly "
+    + UNCLEAR_MARK + " and nothing else."
+)
 # flash-lite: on the free tier gemini-flash-latest often returns 503 (high
 # demand) and has a 5 req/min cap; one agent turn makes several calls.
 TEXT_MODEL = "gemini-flash-lite-latest"
@@ -171,7 +180,7 @@ def build_speak():
     w.node("Speech-safe text", "n8n-nodes-base.code", 2, [0, 300], code("speak_sanitize.js"))
     w.node("Config", "n8n-nodes-base.set", 3.4, [220, 300], set_node(
         assign("ttsModel", "gemini-3.1-flash-tts-preview"),
-        assign("voiceName", "Kore"),
+        assign("voiceName", "Charon"),  # male prebuilt Gemini voice
         assign("ttsStyle", "Read this in a calm, warm, natural voice"),
         assign("text", "={{ String($json.text || '').trim() }}"),
         assign("caption", "={{ String($json.caption || $json.text || '').slice(0, 1024) }}"),
@@ -365,8 +374,7 @@ def build_assistant():
         **http_json("POST",
                     f"={GEMINI_BASE}{{{{ {cfg}.transcribeModel }}}}:generateContent",
                     "={{ JSON.stringify({ contents: [{ parts: [\n"
-                    "  { text: 'Transcribe this voice message verbatim, in its original language. "
-                    "Output only the transcript.' },\n"
+                    f"  {{ text: '{TRANSCRIBE_PROMPT}' }},\n"
                     f"  {{ inlineData: {{ mimeType: {route}.mimeType, data: $json.audioB64 }} }}\n"
                     "] }] }) }}", timeout=60000),
         **GEMINI_AUTH,

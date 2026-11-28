@@ -13,7 +13,13 @@ if (r.kind === 'voice') {
     .map(p => p.text)
     .join(' ')
     .trim();
-  if (!userText) userText = '[The voice message was empty or inaudible.]';
+  // The transcriber only accepts French and English and answers UNCLEAR when it is unsure
+  // (prompt in src/build_workflows.py). Then Jarvis must not guess: it asks to repeat.
+  if (!userText || /^\W*\[?UNCLEAR\]?\W*$/i.test(userText)) {
+    userText = "[System note: the user's voice message could not be understood (inaudible, unclear, "
+      + 'or not in French or English). Do not guess what they meant and propose nothing. '
+      + 'Briefly ask them, in French, to repeat, in French or English.]';
+  }
 }
 
 // A failed style lookup must never block the assistant: fall back to the default style.
